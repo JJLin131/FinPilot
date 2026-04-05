@@ -1,0 +1,46 @@
+spring:
+  application:
+    name: ecommerce-ai-agent-service
+  jackson:
+    default-property-inclusion: non_null
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/work_memory?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: root
+    password: 123456
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  sql:
+    init:
+      mode: always
+  ai:
+    deepseek:
+      base-url: https://api.deepseek.com
+      api-key: sk-1ebf6d8fd8c243358b3e75236840629c
+      chat:
+        options:
+          model: deepseek-chat
+
+server:
+  port: 8099
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+ai:
+  workflow:
+    max-retries: 3
+  capability:
+    base-url: http://localhost:8979
+    connect-timeout: 5s
+    read-timeout: 20s
+    auth-header-name: Authorization
+    auth-header-value: JJLin
+    workspace-root: .
+    browser-allowed-schemes:
+      - http
+      - https
+    default-headers:
+      X-AI-Agent: ecommerce-ai-agent-service
+      Content-Type: application/json
