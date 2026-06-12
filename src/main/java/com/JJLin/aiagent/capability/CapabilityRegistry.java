@@ -1,7 +1,5 @@
 package com.JJLin.aiagent.capability;
 
-import org.springframework.stereotype.Component;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -11,7 +9,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-@Component
 public class CapabilityRegistry {
 
     private final Map<String, CapabilityHandler> handlers = new LinkedHashMap<>();

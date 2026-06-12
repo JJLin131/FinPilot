@@ -2,14 +2,12 @@ package com.JJLin.aiagent.client;
 
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.MediaType;
-import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.util.UriBuilder;
 
 import java.net.URI;
 import java.util.Map;
 
-@Component
 public class EcommerceHttpClient {
 
     private final RestClient restClient;

@@ -11,13 +11,15 @@ spring:
   sql:
     init:
       mode: always
-  ai:
-    deepseek:
-      base-url: https://api.deepseek.com
-      api-key: sk-1ebf6d8fd8c243358b3e75236840629c
-      chat:
-        options:
-          model: deepseek-chat
+langchain4j:
+  open-ai:
+    chat-model:
+      base-url: https://api.deepseek.com/v1
+      api-key: ${DEEPSEEK_API_KEY:}
+      model-name: deepseek-chat
+      temperature: 0.1
+      max-retries: 2
+      timeout: 30s
 
 server:
   port: 8099
@@ -29,18 +31,16 @@ management:
         include: health,info,metrics
 
 ai:
-  workflow:
-    max-retries: 3
-  capability:
-    base-url: http://localhost:8979
-    connect-timeout: 5s
-    read-timeout: 20s
-    auth-header-name: Authorization
-    auth-header-value: JJLin
-    workspace-root: .
-    browser-allowed-schemes:
-      - http
-      - https
-    default-headers:
-      X-AI-Agent: ecommerce-ai-agent-service
-      Content-Type: application/json
+  knowledge:
+    chroma-base-url: ${CHROMA_BASE_URL:http://localhost:8000}
+    finance-collection: ${FINANCE_CHROMA_COLLECTION:finance-knowledge-bge-m3-v1}
+    embedding-base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+    embedding-model-name: ${EMBEDDING_MODEL_NAME:bge-m3}
+    chunk-size: 800
+    chunk-overlap: 100
+    resource-pattern: classpath*:*.md
+    bm25-index-path: ${BM25_INDEX_PATH:./data/lucene/knowledge}
+    rrf-k: 60
+    reranker-base-url: ${RERANKER_BASE_URL:http://localhost:8081}
+    reranker-enabled: ${RERANKER_ENABLED:true}
+    reranker-timeout-seconds: 30

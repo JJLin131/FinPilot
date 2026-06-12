@@ -5,14 +5,11 @@ import com.JJLin.aiagent.client.BrowserOperationException;
 import com.JJLin.aiagent.config.CapabilityProperties;
 import com.JJLin.aiagent.entites.ActionSpec;
 import com.JJLin.aiagent.entites.ExecutionResult;
-import org.springframework.stereotype.Component;
-
 import java.net.URI;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-@Component
 public class OpenBrowserUrlCapabilityHandler extends AbstractHttpCapabilityHandler {
 
     private final BrowserClient browserClient;

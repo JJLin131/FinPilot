@@ -1,0 +1,44 @@
+services:
+  chroma:
+    image: chromadb/chroma:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma-data:/data
+  ollama:
+    image: ollama/ollama:latest
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  ollama-model-pull:
+    image: ollama/ollama:latest
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    command: ["pull", "bge-m3"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+  reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    command: ["--model-id", "BAAI/bge-reranker-v2-m3", "--port", "80"]
+    ports:
+      - "8081:80"
+    volumes:
+      - reranker-data:/data
+
+volumes:
+  chroma-data:
+  ollama-data:
+  reranker-data:

@@ -3,13 +3,10 @@ package com.JJLin.aiagent.capability;
 import com.JJLin.aiagent.client.EcommerceHttpClient;
 import com.JJLin.aiagent.entites.ActionSpec;
 import com.JJLin.aiagent.entites.ExecutionResult;
-import org.springframework.stereotype.Component;
-
 import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-@Component
 public class OrderCreateCapabilityHandler extends AbstractHttpCapabilityHandler {
 
     private final EcommerceHttpClient httpClient;
