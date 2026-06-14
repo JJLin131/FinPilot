@@ -18,4 +18,9 @@ public class KnowledgeProperties {
     private String rerankerBaseUrl = "http://localhost:8081";
     private boolean rerankerEnabled = true;
     private int rerankerTimeoutSeconds = 30;
+    private String queryRewriterBaseUrl = "http://localhost:11434";
+    private String queryRewriterModelName = "qwen2.5:3b";
+    private boolean queryRewriterEnabled = true;
+    private int queryRewriterTimeoutSeconds = 30;
+    private int queryRewriterMaxRewrites = 3;
 }

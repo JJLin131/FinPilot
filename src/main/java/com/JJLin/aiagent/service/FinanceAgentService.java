@@ -2,9 +2,10 @@ package com.JJLin.aiagent.service;
 
 import com.JJLin.aiagent.agent.AgentRequestContext;
 import com.JJLin.aiagent.agent.ConversationLockService;
-import com.JJLin.aiagent.agent.FinanceAssistant;
 import com.JJLin.aiagent.api.AgentChatResponse;
 import com.JJLin.aiagent.api.FinanceChatRequest;
+import com.JJLin.aiagent.route.IntentRouterService;
+import com.JJLin.aiagent.route.RoutedAgentExecution;
 import org.springframework.stereotype.Service;
 
 import java.util.UUID;
@@ -12,11 +13,11 @@ import java.util.UUID;
 @Service
 public class FinanceAgentService {
 
-    private final FinanceAssistant assistant;
+    private final IntentRouterService intentRouterService;
     private final ConversationLockService lockService;
 
-    public FinanceAgentService(FinanceAssistant assistant, ConversationLockService lockService) {
-        this.assistant = assistant;
+    public FinanceAgentService(IntentRouterService intentRouterService, ConversationLockService lockService) {
+        this.intentRouterService = intentRouterService;
         this.lockService = lockService;
     }
 
@@ -29,9 +30,12 @@ public class FinanceAgentService {
         String requestId = UUID.randomUUID().toString();
         AgentRequestContext.open(requestId, "FINANCE", request.getTenantId(), request.getUserId());
         try {
-            String answer = assistant.chat(memoryId, request.getContent());
+            RoutedAgentExecution execution = intentRouterService.routeAndExecute(memoryId, request.getContent());
             return AgentChatResponse.builder().requestId(requestId).domain("FINANCE").status("SUCCEEDED")
-                    .answer(answer).evidence(AgentRequestContext.evidence()).build();
+                    .answer(execution.getAnswer())
+                    .evidence(AgentRequestContext.evidence())
+                    .route(execution.getRouteDecision())
+                    .build();
         } finally {
             AgentRequestContext.close();
         }

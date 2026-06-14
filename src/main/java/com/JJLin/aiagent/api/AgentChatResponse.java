@@ -1,5 +1,6 @@
 package com.JJLin.aiagent.api;
 
+import com.JJLin.aiagent.route.RouteDecision;
 import lombok.Builder;
 import lombok.Value;
 
@@ -13,4 +14,5 @@ public class AgentChatResponse {
     String status;
     String answer;
     List<AgentEvidence> evidence;
+    RouteDecision route;
 }
