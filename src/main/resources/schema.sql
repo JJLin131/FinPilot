@@ -53,6 +53,28 @@ create table if not exists agent_tool_audit (
     key idx_agent_tool_audit_request (request_id)
 );
 
+create table if not exists unknown_intent_audit (
+    id bigint not null auto_increment primary key,
+    request_id varchar(64) not null,
+    tenant_id varchar(128) null,
+    user_id varchar(64) not null,
+    domain varchar(32) not null,
+    user_message text not null,
+    raw_intent_json text null,
+    classifier_intent varchar(64) not null,
+    embedding_top1_intent varchar(64) null,
+    embedding_top2_intent varchar(64) null,
+    reason text not null,
+    semantic_score double not null,
+    margin_score double not null,
+    agreement_score double not null,
+    final_confidence double not null,
+    fallback_cause varchar(64) not null,
+    created_at datetime(6) not null,
+    key idx_unknown_intent_audit_created (created_at),
+    key idx_unknown_intent_audit_request (request_id)
+);
+
 create table if not exists knowledge_document (
     document_id varchar(191) not null primary key,
     domain varchar(32) not null,
@@ -76,4 +98,26 @@ create table if not exists knowledge_document_chunk (
     primary key (document_id, chunk_id),
     constraint fk_knowledge_document_chunk_document
         foreign key (document_id) references knowledge_document(document_id) on delete cascade
+);
+
+create table if not exists agent_eval_run (
+    id bigint not null auto_increment primary key,
+    suite_name varchar(128) not null,
+    total_cases int not null,
+    passed_cases int not null,
+    score double not null,
+    details_json longtext null,
+    created_at datetime(6) not null,
+    key idx_agent_eval_run_suite_created (suite_name, created_at)
+);
+
+create table if not exists agent_trace_feedback (
+    id bigint not null auto_increment primary key,
+    trace_id varchar(64) not null,
+    request_id varchar(64) not null,
+    rating int not null,
+    comment text null,
+    created_at datetime(6) not null,
+    key idx_agent_trace_feedback_trace (trace_id),
+    key idx_agent_trace_feedback_request (request_id)
 );
