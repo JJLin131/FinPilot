@@ -110,7 +110,9 @@ class GraphState(BaseModel):
     reranked_docs: list[RagMatch] = Field(default_factory=list)
     tool_invocations: list[ToolInvocation] = Field(default_factory=list)
     evidence: list[AgentEvidence] = Field(default_factory=list)
+    recent_messages: list[dict[str, Any]] = Field(default_factory=list)
+    workflow_memory: dict[str, Any] | None = None
+    system_operation_hints: list[str] = Field(default_factory=list)
     final_answer: str = ""
     latency_breakdown: dict[str, float] = Field(default_factory=dict)
     scores: dict[str, float] = Field(default_factory=dict)
-

@@ -25,8 +25,29 @@ class Settings(BaseSettings):
     audit_backend: str = "mysql"
     audit_dir: Path = Field(default=Path("./data/python-audit"))
     knowledge_dir: Path = Field(default=Path("./src/main/resources"))
+    rag_bootstrap_on_startup: bool = False
+    bm25_index_path: Path = Field(default=Path("./data/bm25/knowledge.json"))
+    rrf_k: int = 60
 
     ollama_base_url: str = "http://100.92.110.54:11434"
+    embedding_base_url: str = "http://100.92.110.54:11434"
+    embedding_model_name: str = "bge-m3"
+    embedding_timeout_seconds: int = 60
+    chroma_base_url: str = "http://100.92.110.54:8000"
+    chroma_tenant: str = "default_tenant"
+    chroma_database: str = "default_database"
+    chroma_finance_collection: str = "finance-knowledge-bge-m3-v1"
+    vector_min_score: float = 0.45
+    vector_enabled: bool = True
+    title_conflict_enabled: bool = True
+    title_conflict_min_score: float = 0.82
+    title_conflict_search_limit: int = 8
+
+    rag_curation_enabled: bool = True
+    rag_curation_provider: str = "deepseek"
+    rag_curation_model_name: str = "deepseek-v4-pro"
+    rag_curation_timeout_seconds: int = 60
+
     query_rewriter_base_url: str = "http://100.92.110.54:11434"
     query_rewriter_model_name: str = "qwen2.5:3b"
     query_rewriter_enabled: bool = True

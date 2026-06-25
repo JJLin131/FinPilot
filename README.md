@@ -24,7 +24,11 @@ POST /api/finance/chat
   -> route decide
   -> sub-agent
   -> tool invoke / RAG lookup
+  -> RagCurationAgent on document ingest
   -> remote Ollama query rewrite
+  -> remote Ollama bge-m3 embedding
+  -> Chroma vector retrieval + BM25 retrieval
+  -> RRF fusion
   -> remote reranker
   -> answer compose
   -> MySQL audit + Langfuse trace/score
@@ -35,19 +39,16 @@ Current Python package:
 ```text
 python_agent_service/
   api.py
-  service.py
-  graph.py
-  router.py
-  subagents.py
-  tools.py
-  rag.py
+  main.py
+  config.py
+  models.py
   llm.py
   reranker.py
-  audit.py
-  tracing.py
-  langfuse_support.py
-  ragas_support.py
-  evals.py
+  agent/
+  rag/
+  memory/
+  observability/
+  evals/
 ```
 
 ## Prerequisites
@@ -57,6 +58,7 @@ python_agent_service/
 - A local MySQL instance on your host machine
 - A remote machine reachable by Tailscale that exposes:
   - Ollama on `11434`
+  - Chroma on `8000`
   - reranker on `8081`
 
 Expected host MySQL defaults:
@@ -82,6 +84,10 @@ Current defaults:
 - `ROUTING_PROVIDER=deepseek`
 - `ROUTING_MODEL_NAME=deepseek-v4-pro`
 - `OLLAMA_BASE_URL=http://100.92.110.54:11434`
+- `EMBEDDING_BASE_URL=http://100.92.110.54:11434`
+- `EMBEDDING_MODEL_NAME=bge-m3`
+- `CHROMA_BASE_URL=http://100.92.110.54:8000`
+- `CHROMA_FINANCE_COLLECTION=finance-knowledge-bge-m3-v1`
 - `QUERY_REWRITER_BASE_URL=http://100.92.110.54:11434`
 - `RERANKER_BASE_URL=http://100.92.110.54:8081`
 
@@ -89,7 +95,11 @@ These are used for:
 
 - route classification via DeepSeek chat completions
 - knowledge answer synthesis via DeepSeek chat completions
+- document curation via DeepSeek chat completions when ingesting documents
 - query rewriting via remote Ollama
+- embeddings via remote Ollama `bge-m3`
+- vector retrieval via remote Chroma
+- BM25 retrieval via local persisted index under `data/bm25`
 - reranking via remote cross-encoder service
 
 Check remote connectivity before startup:
@@ -185,6 +195,81 @@ Health check:
 curl http://localhost:8099/healthz
 ```
 
+## Knowledge Ingest And RAG
+
+新增文档必须走 Python 的知识入口，这样才会执行 curation、chunk、向量写入、BM25 索引和 MySQL 元数据更新：
+
+```powershell
+curl -X POST http://localhost:8099/api/knowledge/documents `
+  -H "Content-Type: application/json" `
+  -d '{
+    "document_id": "finance-rule-001",
+    "domain": "FINANCE",
+    "tenant_id": "tenant-a",
+    "title": "基金赎回规则",
+    "source": "manual",
+    "content": "基金赎回通常 T+1 到账。",
+    "tags": ["基金", "赎回"]
+  }'
+```
+
+导入 `src/main/resources` 下的内置 markdown：
+
+```powershell
+curl -X POST http://localhost:8099/api/knowledge/bootstrap/resources
+```
+
+当前 RAG 检索链路：
+
+```text
+query
+  -> Ollama query rewrite
+  -> Ollama bge-m3 query embedding
+  -> Chroma vector retrieval
+  -> BM25 retrieval
+  -> RRF fusion
+  -> remote reranker
+  -> DeepSeek grounded answer
+```
+
+Chroma 写入协议：
+
+```text
+doc_info:
+  id = {documentId}:doc_info
+  embeddings = [embed(title)]
+  documents = [title]
+  metadatas = [{documentId, recordType: "doc_info", status: "ACTIVE"}]
+
+chunk:
+  id = {documentId}:chunk:{index}
+  embeddings = [embed(chunk_text)]
+  documents = [chunk_text]
+  metadatas = [{documentId, recordType: "chunk", status: "ACTIVE"}]
+```
+
+embedding 不写入 metadata，也不写入 chunk 文本；它作为 Chroma 的向量字段写入。
+
+新增文档时还会执行标题冲突处理：
+
+```text
+curated title
+  -> Ollama bge-m3 title embedding
+  -> Chroma 只检索 recordType=doc_info,status=ACTIVE 的标题向量
+  -> 获取相似 documentId
+  -> 查 MySQL knowledge_document 的 valid_from/status/tenant
+  -> RagCurationAgent 比较日期
+  -> valid_from 更旧或相同的相似旧文档标记为 EXPIRED
+  -> MySQL 标记旧文档 EXPIRED
+  -> 同步删除旧文档 Chroma doc_info/chunk 向量和 BM25 索引
+```
+
+相关阈值：
+
+- `TITLE_CONFLICT_ENABLED=true`
+- `TITLE_CONFLICT_MIN_SCORE=0.82`
+- `TITLE_CONFLICT_SEARCH_LIMIT=8`
+
 ## API Usage
 
 ```bash
@@ -256,8 +341,8 @@ The project now uses Langfuse for:
 
 Relevant files:
 
-- [python_agent_service/langfuse_support.py](D:\IntelliJ_IDEA_U\Projects\ecommerce-ai-agent-service\python_agent_service\langfuse_support.py:1)
-- [python_agent_service/evals.py](D:\IntelliJ_IDEA_U\Projects\ecommerce-ai-agent-service\python_agent_service\evals.py:1)
+- [python_agent_service/observability/langfuse_support.py](D:\IntelliJ_IDEA_U\Projects\ecommerce-ai-agent-service\python_agent_service\observability\langfuse_support.py:1)
+- [python_agent_service/evals/runner.py](D:\IntelliJ_IDEA_U\Projects\ecommerce-ai-agent-service\python_agent_service\evals\runner.py:1)
 - [observability/otel-collector.yaml](D:\IntelliJ_IDEA_U\Projects\ecommerce-ai-agent-service\observability\otel-collector.yaml:1)
 
 Manual dataset sync:
@@ -278,7 +363,7 @@ Local desktop development may still run without `ragas`. In that case:
 
 Adapter file:
 
-- [python_agent_service/ragas_support.py](D:\IntelliJ_IDEA_U\Projects\ecommerce-ai-agent-service\python_agent_service\ragas_support.py:1)
+- [python_agent_service/evals/ragas.py](D:\IntelliJ_IDEA_U\Projects\ecommerce-ai-agent-service\python_agent_service\evals\ragas.py:1)
 
 ## Useful Scripts
 
@@ -298,6 +383,6 @@ Adapter file:
 ## Notes
 
 - Dockerized agent reaches host MySQL via `host.docker.internal`.
-- Dockerized agent reaches remote Ollama and reranker directly through the configured Tailscale IP.
+- Dockerized agent reaches remote Ollama, Chroma, and reranker directly through the configured Tailscale IP.
 - If Langfuse is down, the API still runs; traces and scores just will not export.
 - If `ragas` is unavailable locally, heuristic scores are used instead of failing the eval run.

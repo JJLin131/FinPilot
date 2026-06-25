@@ -2,15 +2,18 @@ from __future__ import annotations
 
 from fastapi import FastAPI, Header, HTTPException
 
+from python_agent_service.agent.service import FinanceAgentService
 from python_agent_service.evals import EvalRunner
 from python_agent_service.models import AgentChatResponse, FinanceChatRequest
-from python_agent_service.service import FinanceAgentService
+from python_agent_service.rag.lifecycle import KnowledgeLifecycleService
+from python_agent_service.rag.models import KnowledgeDocumentRequest, KnowledgeDocumentResult
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="ecommerce-ai-agent-service-py", version="0.1.0")
     service = FinanceAgentService()
     eval_runner = EvalRunner(service, service.audit_store)
+    lifecycle_service = KnowledgeLifecycleService(service.rag_service)
 
     @app.get("/healthz")
     def healthz():
@@ -33,8 +36,19 @@ def create_app() -> FastAPI:
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @app.post("/api/knowledge/documents", response_model=KnowledgeDocumentResult)
+    def ingest_knowledge_document(request: KnowledgeDocumentRequest):
+        return service.rag_service.ingest(request)
+
+    @app.post("/api/knowledge/bootstrap/resources", response_model=list[KnowledgeDocumentResult])
+    def bootstrap_knowledge_resources():
+        return service.rag_service.bootstrap_resources()
+
+    @app.delete("/api/knowledge/expired")
+    def delete_expired_knowledge_documents():
+        return {"deletedDocuments": lifecycle_service.remove_expired_documents()}
+
     return app
 
 
 app = create_app()
-
