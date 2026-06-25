@@ -1,4 +1,4 @@
-# E-Commerce AI Agent Service
+﻿# E-Commerce AI Agent Service
 
 Python finance-agent service built with `FastAPI + LangGraph + OpenTelemetry + Langfuse`, using your host MySQL for audits and a remote Ollama/reranker machine over Tailscale.
 
@@ -197,7 +197,7 @@ curl http://localhost:8099/healthz
 
 ## Knowledge Ingest And RAG
 
-新增文档必须走 Python 的知识入口，这样才会执行 curation、chunk、向量写入、BM25 索引和 MySQL 元数据更新：
+鏂板鏂囨。蹇呴』璧?Python 鐨勭煡璇嗗叆鍙ｏ紝杩欐牱鎵嶄細鎵ц curation銆乧hunk銆佸悜閲忓啓鍏ャ€丅M25 绱㈠紩鍜?MySQL 鍏冩暟鎹洿鏂帮細
 
 ```powershell
 curl -X POST http://localhost:8099/api/knowledge/documents `
@@ -206,20 +206,19 @@ curl -X POST http://localhost:8099/api/knowledge/documents `
     "document_id": "finance-rule-001",
     "domain": "FINANCE",
     "tenant_id": "tenant-a",
-    "title": "基金赎回规则",
+    "title": "鍩洪噾璧庡洖瑙勫垯",
     "source": "manual",
-    "content": "基金赎回通常 T+1 到账。",
-    "tags": ["基金", "赎回"]
+    "content": "鍩洪噾璧庡洖閫氬父 T+1 鍒拌处銆?,
+    "tags": ["鍩洪噾", "璧庡洖"]
   }'
 ```
 
-导入 `src/main/resources` 下的内置 markdown：
-
+瀵煎叆 `src/main/resources` 涓嬬殑鍐呯疆 markdown锛?
 ```powershell
 curl -X POST http://localhost:8099/api/knowledge/bootstrap/resources
 ```
 
-当前 RAG 检索链路：
+褰撳墠 RAG 妫€绱㈤摼璺細
 
 ```text
 query
@@ -232,8 +231,7 @@ query
   -> DeepSeek grounded answer
 ```
 
-Chroma 写入协议：
-
+Chroma 鍐欏叆鍗忚锛?
 ```text
 doc_info:
   id = {documentId}:doc_info
@@ -248,29 +246,31 @@ chunk:
   metadatas = [{documentId, recordType: "chunk", status: "ACTIVE"}]
 ```
 
-embedding 不写入 metadata，也不写入 chunk 文本；它作为 Chroma 的向量字段写入。
-
-新增文档时还会执行标题冲突处理：
+embedding 涓嶅啓鍏?metadata锛屼篃涓嶅啓鍏?chunk 鏂囨湰锛涘畠浣滀负 Chroma 鐨勫悜閲忓瓧娈靛啓鍏ャ€?
+鏂板鏂囨。鏃惰繕浼氭墽琛屾爣棰樺啿绐佸鐞嗭細
 
 ```text
 curated title
   -> Ollama bge-m3 title embedding
-  -> Chroma 只检索 recordType=doc_info,status=ACTIVE 的标题向量
-  -> 获取相似 documentId
-  -> 查 MySQL knowledge_document 的 valid_from/status/tenant
-  -> RagCurationAgent 比较日期
-  -> valid_from 更旧或相同的相似旧文档标记为 EXPIRED
-  -> MySQL 标记旧文档 EXPIRED
-  -> 同步删除旧文档 Chroma doc_info/chunk 向量和 BM25 索引
+  -> Chroma 鍙绱?recordType=doc_info,status=ACTIVE 鐨勬爣棰樺悜閲?  -> 鑾峰彇鐩镐技 documentId
+  -> 鏌?MySQL knowledge_document 鐨?valid_from/status/tenant
+  -> RagCurationAgent 姣旇緝鏃ユ湡
+  -> valid_from 鏇存棫鎴栫浉鍚岀殑鐩镐技鏃ф枃妗ｆ爣璁颁负 EXPIRED
+  -> MySQL 鏍囪鏃ф枃妗?EXPIRED
+  -> 鍚屾鍒犻櫎鏃ф枃妗?Chroma doc_info/chunk 鍚戦噺鍜?BM25 绱㈠紩
 ```
 
-相关阈值：
+鐩稿叧闃堝€硷細
 
 - `TITLE_CONFLICT_ENABLED=true`
 - `TITLE_CONFLICT_MIN_SCORE=0.82`
 - `TITLE_CONFLICT_SEARCH_LIMIT=8`
 
 ## API Usage
+
+Current Python runtime only keeps `search_finance_knowledge` as the built-in tool. Legacy Java external tools, browser/e-commerce capabilities, and old finance-analysis tools have been removed so new tools can be defined cleanly.
+
+Recommended knowledge request example:
 
 ```bash
 curl -X POST http://localhost:8099/api/finance/chat \
@@ -280,7 +280,7 @@ curl -X POST http://localhost:8099/api/finance/chat \
     "tenant_id": "tenant-a",
     "user_id": "user-1",
     "chat_id": "chat-1",
-    "content": "查一下账户余额"
+    "content": "What are the active knowledge rules for fund redemption?"
   }'
 ```
 

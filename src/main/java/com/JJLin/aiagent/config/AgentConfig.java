@@ -6,7 +6,6 @@ import com.JJLin.aiagent.agent.QueryAssistant;
 import com.JJLin.aiagent.agent.RagCurationAssistant;
 import com.JJLin.aiagent.agent.TransferAssistant;
 import com.JJLin.aiagent.memory.JdbcAgentChatMemoryStore;
-import com.JJLin.aiagent.tools.FinanceTools;
 import dev.langchain4j.memory.chat.ChatMemoryProvider;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
@@ -43,39 +42,30 @@ public class AgentConfig {
     @Bean
     FinanceAssistant financeAssistant(
             ChatModel chatModel,
-            ChatMemoryProvider chatMemoryProvider,
-            FinanceTools financeTools) {
+            ChatMemoryProvider chatMemoryProvider) {
         return AiServices.builder(FinanceAssistant.class)
                 .chatModel(chatModel)
                 .chatMemoryProvider(chatMemoryProvider)
-                .tools(financeTools)
-                .maxToolCallingRoundTrips(5)
                 .build();
     }
 
     @Bean
     TransferAssistant transferAssistant(
             ChatModel chatModel,
-            ChatMemoryProvider chatMemoryProvider,
-            FinanceTools financeTools) {
+            ChatMemoryProvider chatMemoryProvider) {
         return AiServices.builder(TransferAssistant.class)
                 .chatModel(chatModel)
                 .chatMemoryProvider(chatMemoryProvider)
-                .tools(financeTools)
-                .maxToolCallingRoundTrips(5)
                 .build();
     }
 
     @Bean
     QueryAssistant queryAssistant(
             ChatModel chatModel,
-            ChatMemoryProvider chatMemoryProvider,
-            FinanceTools financeTools) {
+            ChatMemoryProvider chatMemoryProvider) {
         return AiServices.builder(QueryAssistant.class)
                 .chatModel(chatModel)
                 .chatMemoryProvider(chatMemoryProvider)
-                .tools(financeTools)
-                .maxToolCallingRoundTrips(5)
                 .build();
     }
 }
