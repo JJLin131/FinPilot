@@ -23,7 +23,26 @@ services:
       AUDIT_BACKEND: mysql
       AUDIT_DIR: /app/data/python-audit
       KNOWLEDGE_DIR: /app/src/main/resources
+      RAG_BOOTSTRAP_ON_STARTUP: "false"
+      BM25_INDEX_PATH: /app/data/bm25/knowledge.json
+      RRF_K: 60
       OLLAMA_BASE_URL: http://100.92.110.54:11434
+      EMBEDDING_BASE_URL: http://100.92.110.54:11434
+      EMBEDDING_MODEL_NAME: bge-m3
+      EMBEDDING_TIMEOUT_SECONDS: 60
+      CHROMA_BASE_URL: http://100.92.110.54:8000
+      CHROMA_TENANT: default_tenant
+      CHROMA_DATABASE: default_database
+      CHROMA_FINANCE_COLLECTION: finance-knowledge-bge-m3-v1
+      VECTOR_MIN_SCORE: 0.45
+      VECTOR_ENABLED: "true"
+      TITLE_CONFLICT_ENABLED: "true"
+      TITLE_CONFLICT_MIN_SCORE: 0.82
+      TITLE_CONFLICT_SEARCH_LIMIT: 8
+      RAG_CURATION_ENABLED: "true"
+      RAG_CURATION_PROVIDER: deepseek
+      RAG_CURATION_MODEL_NAME: deepseek-v4-pro
+      RAG_CURATION_TIMEOUT_SECONDS: 60
       QUERY_REWRITER_BASE_URL: http://100.92.110.54:11434
       QUERY_REWRITER_MODEL_NAME: qwen2.5:3b
       QUERY_REWRITER_ENABLED: "true"
@@ -45,6 +64,8 @@ services:
       MYSQL_DATABASE: work_memory
     ports:
       - "8099:8099"
+    volumes:
+      - agent_data:/app/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -262,3 +283,4 @@ volumes:
   chroma-data:
   ollama-data:
   reranker-data:
+  agent_data:
