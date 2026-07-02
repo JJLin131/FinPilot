@@ -37,7 +37,7 @@ POST /api/finance/chat
 Current Python package:
 
 ```text
-python_agent_service/
+FinanceAgent/
   api.py
   main.py
   config.py
@@ -186,7 +186,7 @@ python -m venv .venv
 Run the API:
 
 ```powershell
-.\.venv\Scripts\python.exe -m python_agent_service.main
+.\.venv\Scripts\python.exe -m FinanceAgent.main
 ```
 
 Health check:
@@ -341,8 +341,8 @@ The project now uses Langfuse for:
 
 Relevant files:
 
-- [python_agent_service/observability/langfuse_support.py](D:\IntelliJ_IDEA_U\Projects\ecommerce-ai-agent-service\python_agent_service\observability\langfuse_support.py:1)
-- [python_agent_service/evals/runner.py](D:\IntelliJ_IDEA_U\Projects\ecommerce-ai-agent-service\python_agent_service\evals\runner.py:1)
+- [FinanceAgent/observability/langfuse_support.py](D:\IntelliJ_IDEA_U\Projects\ecommerce-ai-agent-service\FinanceAgent\observability\langfuse_support.py:1)
+- [FinanceAgent/evals/runner.py](D:\IntelliJ_IDEA_U\Projects\ecommerce-ai-agent-service\FinanceAgent\evals\runner.py:1)
 - [observability/otel-collector.yaml](D:\IntelliJ_IDEA_U\Projects\ecommerce-ai-agent-service\observability\otel-collector.yaml:1)
 
 Manual dataset sync:
@@ -363,7 +363,7 @@ Local desktop development may still run without `ragas`. In that case:
 
 Adapter file:
 
-- [python_agent_service/evals/ragas.py](D:\IntelliJ_IDEA_U\Projects\ecommerce-ai-agent-service\python_agent_service\evals\ragas.py:1)
+- [FinanceAgent/evals/ragas.py](D:\IntelliJ_IDEA_U\Projects\ecommerce-ai-agent-service\FinanceAgent\evals\ragas.py:1)
 
 ## Useful Scripts
 
@@ -374,7 +374,7 @@ Adapter file:
 
 ## Key Files
 
-- Python app: [python_agent_service/main.py](D:\IntelliJ_IDEA_U\Projects\ecommerce-ai-agent-service\python_agent_service\main.py:1)
+- Python app: `FinanceAgent/main.py`
 - Docker stack: [compose.yaml](D:\IntelliJ_IDEA_U\Projects\ecommerce-ai-agent-service\compose.yaml:1)
 - Container image: [Dockerfile](D:\IntelliJ_IDEA_U\Projects\ecommerce-ai-agent-service\Dockerfile:1)
 - OTel collector: [observability/otel-collector.yaml](D:\IntelliJ_IDEA_U\Projects\ecommerce-ai-agent-service\observability\otel-collector.yaml:1)
