@@ -48,3 +48,6 @@ class FinanceAgentService:
             metadata={"evidence_count": len(response.evidence)},
         )
         return response
+
+    def shutdown(self) -> None:
+        self.memory_manager.shutdown(wait=True)

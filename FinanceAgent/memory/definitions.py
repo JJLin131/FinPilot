@@ -5,7 +5,7 @@ STRUCTURED_MEMORY_FIELDS: dict[str, str] = {
     "city": "用户所在城市。",
     "gender": "用户性别。",
     "age": "用户年龄。",
-    "job": "用户职业或行业。",
+    "occupation": "用户职业或行业。",
 }
 
 

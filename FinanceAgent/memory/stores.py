@@ -86,6 +86,8 @@ class UserProfileMemoryStore(BaseStore):
         return cleaned
 
     def _clean_values(self, values: dict[str, Any]) -> dict[str, Any]:
+        if "job" in values and "occupation" not in values:
+            values = {**values, "occupation": values["job"]}
         cleaned: dict[str, Any] = {}
         for field in self.fields:
             value = values.get(field)

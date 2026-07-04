@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     memory_semantic_search_limit: int = 5
     memory_semantic_min_score: float = 0.45
     memory_chroma_timeout_seconds: int = 3
+    memory_extraction_max_workers: int = 2
+    memory_extraction_retry_limit: int = 3
+    memory_extraction_recover_on_startup: bool = True
+    memory_extraction_recover_limit: int = 20
     title_conflict_enabled: bool = True
     title_conflict_min_score: float = 0.82
     title_conflict_search_limit: int = 8

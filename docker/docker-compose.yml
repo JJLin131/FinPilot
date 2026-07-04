@@ -1,0 +1,60 @@
+services:
+  # ============================================================
+  # Ollama — 本地 LLM 服务
+  #   - bge-m3: embedding 向量化
+  #   - qwen2.5:0.5b: query 改写小模型
+  #   首次启动会自动拉取模型，耗时取决于网络
+  # ============================================================
+  ollama:
+    build: ./ollama
+    container_name: ollama
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-bge-m3}
+      - QUERY_REWRITE_MODEL=${QUERY_REWRITE_MODEL:-qwen2.5:0.5b}
+      - OLLAMA_KEEP_ALIVE=24h
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - ai_network
+
+  # ============================================================
+  # Cross-Encoder — 基于 HuggingFace sentence-transformers 的精排服务
+  #   默认模型: BAAI/bge-reranker-v2-m3（多语言，与 bge-m3 配套）
+  #   首次启动需下载模型文件（约 2-4 GB），请耐心等待
+  # ============================================================
+  crossencoder:
+    build: ./crossencoder
+    container_name: crossencoder
+    ports:
+      - "${CROSSENCODER_PORT:-8765}:8765"
+    environment:
+      - RERANKER_MODEL=${RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}
+      - CROSSENCODER_DEVICE=${CROSSENCODER_DEVICE:-cpu}
+      - CROSSENCODER_MAX_LENGTH=${CROSSENCODER_MAX_LENGTH:-512}
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 120s
+    restart: unless-stopped
+    networks:
+      - ai_network
+
+volumes:
+  ollama_data:
+  hf_cache:
+
+networks:
+  ai_network:
+    driver: bridge

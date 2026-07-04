@@ -19,6 +19,10 @@ def create_app() -> FastAPI:
     def healthz():
         return {"status": "ok"}
 
+    @app.on_event("shutdown")
+    def shutdown_service():
+        service.shutdown()
+
     @app.post("/api/finance/chat", response_model=AgentChatResponse)
     def finance_chat(request: FinanceChatRequest, x_debug_trace: str | None = Header(default=None)):
         response = service.chat(request.tenant_id, request.user_id, request.chat_id, request.content)
