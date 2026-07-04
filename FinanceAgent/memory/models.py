@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ChatTurn(BaseModel):
@@ -16,14 +16,20 @@ class SemanticMemoryItem(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     memory_key: str = Field(alias="memoryKey")
-    memory_value: str = Field(alias="memoryValue")
+    memory_value: str = Field(default="", alias="memoryValue")
     confidence: float = 0.0
     evidence: str | None = None
+
+    @field_validator("memory_value", mode="before")
+    @classmethod
+    def _none_memory_value_to_empty(cls, value: Any) -> Any:
+        return "" if value is None else value
 
 
 class ExtractedMemory(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
+    is_forget_intent: bool = Field(default=False, alias="isForgetIntent")
     structured_memories: dict[str, Any] = Field(default_factory=dict, alias="structuredMemories")
     semantic_memories: list[SemanticMemoryItem] = Field(default_factory=list, alias="semanticMemories")
 

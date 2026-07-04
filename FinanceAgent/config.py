@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     memory_semantic_search_enabled: bool = True
     memory_semantic_search_limit: int = 5
     memory_semantic_min_score: float = 0.45
+    memory_semantic_merge_max_items: int = 6
+    memory_semantic_merge_max_chars: int = 800
+    memory_semantic_merge_similarity_threshold: float = 0.93
     memory_chroma_timeout_seconds: int = 3
     memory_extraction_max_workers: int = 2
     memory_extraction_retry_limit: int = 3

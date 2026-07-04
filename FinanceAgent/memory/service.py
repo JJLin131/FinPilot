@@ -27,7 +27,11 @@ MEMORY_SIGNAL_TERMS = (
     "不喜欢",
     "忘记",
     "别再",
+    "别记",
     "不要再",
+    "删除",
+    "清除",
+    "取消记忆",
     "更正",
     "纠正",
     "我的",
@@ -39,10 +43,26 @@ MEMORY_SIGNAL_TERMS = (
     "remember",
     "prefer",
     "forget",
+    "delete",
+    "clear",
+    "stop remembering",
     "from now on",
     "always",
     "never",
     "my ",
+)
+FORGET_SIGNAL_TERMS = (
+    "忘记",
+    "别再",
+    "别记",
+    "不要再",
+    "删除",
+    "清除",
+    "取消记忆",
+    "forget",
+    "delete",
+    "clear",
+    "stop remembering",
 )
 UNSAFE_MEMORY_PATTERNS = (
     re.compile(r"\b(api[_-]?key|secret|password|token)\b", re.IGNORECASE),
@@ -117,15 +137,30 @@ class MemoryManager:
                 self.chat_store.update_messages(memory_id, messages[-MAX_STORED_MESSAGES:])
             except Exception as exc:
                 logger.warning("Short-term chat memory write failed for %s: %s", memory_id, exc)
-            self._schedule_long_term_memory(user_id, chat_id, user_message, response)
+        self._schedule_long_term_memory(user_id, chat_id, user_message, response)
 
     def persist_extracted_memory(self, user_id: str, extracted: ExtractedMemory) -> None:
+        if extracted.is_forget_intent:
+            self._forget_extracted_memory(user_id, extracted)
+            return
         structured = self._valid_structured_memories(extracted.structured_memories)
         if structured:
             self.profile_store.upsert_profile(user_id, structured)
         for item in extracted.semantic_memories:
             if self._valid_semantic_memory(item):
                 self.semantic_store.upsert_summary(user_id, item)
+
+    def _forget_extracted_memory(self, user_id: str, extracted: ExtractedMemory) -> None:
+        structured_fields = self._forget_structured_fields(extracted.structured_memories)
+        if structured_fields:
+            self.profile_store.clear_profile_fields(user_id, structured_fields)
+
+        semantic_keys = self._forget_semantic_keys(extracted.semantic_memories)
+        for memory_key in semantic_keys:
+            self.semantic_store.delete_summary(user_id, memory_key)
+
+        if not structured_fields and not semantic_keys:
+            logger.info("Forget intent had no valid memory targets for user %s.", user_id)
 
     def _schedule_long_term_memory(
         self,
@@ -204,13 +239,33 @@ class MemoryManager:
             and not self._contains_unsafe_memory_text(item.evidence or "")
         )
 
+    def _forget_structured_fields(self, values: dict[str, Any]) -> list[str]:
+        fields: list[str] = []
+        for key in values:
+            key = "occupation" if key == "job" else key
+            if key in STRUCTURED_MEMORY_FIELDS and key not in fields:
+                fields.append(key)
+        return fields
+
+    def _forget_semantic_keys(self, items: list[SemanticMemoryItem]) -> list[str]:
+        keys: list[str] = []
+        for item in items:
+            if item.memory_key in SEMANTIC_MEMORY_KEYS and item.memory_key not in keys:
+                keys.append(item.memory_key)
+        return keys
+
     def _should_extract_long_term_memory(self, user_message: str, response: AgentChatResponse) -> bool:
         if not settings.memory_extraction_enabled:
             return False
-        if response.route.normalized_intent == "UNKNOWN":
+        has_forget_signal = self._has_forget_signal(user_message)
+        if response.route.normalized_intent == "UNKNOWN" and not has_forget_signal:
             return False
-        if not response.answer.strip() or response.answer == UNKNOWN_INTENT_ANSWER:
+        if not response.answer.strip():
             return False
+        if response.answer == UNKNOWN_INTENT_ANSWER and not has_forget_signal:
+            return False
+        if has_forget_signal:
+            return True
         if self._contains_unsafe_memory_text(user_message) or self._contains_unsafe_memory_text(response.answer):
             return False
         if self._has_memory_signal(user_message):
@@ -221,6 +276,10 @@ class MemoryManager:
     def _has_memory_signal(self, text: str) -> bool:
         lowered = text.lower()
         return any(term in lowered for term in MEMORY_SIGNAL_TERMS)
+
+    def _has_forget_signal(self, text: str) -> bool:
+        lowered = text.lower()
+        return any(term in lowered for term in FORGET_SIGNAL_TERMS)
 
     def _contains_unsafe_memory_text(self, text: str) -> bool:
         return any(pattern.search(text) for pattern in UNSAFE_MEMORY_PATTERNS)

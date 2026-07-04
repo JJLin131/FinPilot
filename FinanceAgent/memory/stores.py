@@ -85,6 +85,17 @@ class UserProfileMemoryStore(BaseStore):
                 cursor.execute(sql, params)
         return cleaned
 
+    def clear_profile_fields(self, user_id: str, fields: list[str]) -> list[str]:
+        cleaned = self._clean_fields(fields)
+        if not cleaned:
+            return []
+        update_clause = ", ".join(f"{field} = null" for field in cleaned)
+        sql = f"update user_profile set {update_clause}, updated_at = current_timestamp(6) where user_id = %s"
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(sql, (user_id,))
+        return cleaned
+
     def _clean_values(self, values: dict[str, Any]) -> dict[str, Any]:
         if "job" in values and "occupation" not in values:
             values = {**values, "occupation": values["job"]}
@@ -103,4 +114,12 @@ class UserProfileMemoryStore(BaseStore):
                 except (TypeError, ValueError):
                     continue
             cleaned[field] = value
+        return cleaned
+
+    def _clean_fields(self, fields: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for field in fields:
+            field = "occupation" if field == "job" else field
+            if field in self.fields and field not in cleaned:
+                cleaned.append(field)
         return cleaned

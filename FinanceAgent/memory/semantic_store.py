@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
+from difflib import SequenceMatcher
 from typing import Any
 
 from FinanceAgent.config import settings
 from FinanceAgent.memory.models import SemanticMemoryItem, SemanticMemoryRecord
 from FinanceAgent.rag.embeddings import OllamaEmbeddingClient
 from FinanceAgent.rag.vector_store import ChromaVectorStore
+
+MEMORY_FRAGMENT_SPLIT_RE = re.compile(r"[\r\n]+|[。；;]+")
+MEMORY_FRAGMENT_PREFIX_RE = re.compile(r"^\s*(?:[-*]\s*)?(?:新记忆|记忆|更新|补充)\s*[:：]\s*")
 
 
 class ChromaSemanticMemoryStore:
@@ -57,13 +62,14 @@ class ChromaSemanticMemoryStore:
         existing = self.get(user_id, item.memory_key)
         merged_value = self._merge_memory(existing.memory_value if existing else "", item.memory_value)
         now = datetime.now(UTC)
+        confidence = max(float(existing.confidence) if existing else 0.0, float(item.confidence))
         metadata = {
             "recordType": "user_memory",
             "userId": user_id,
             "memoryKey": item.memory_key,
             "memoryType": "semantic",
             "status": "ACTIVE",
-            "confidence": float(item.confidence),
+            "confidence": confidence,
             "evidence": item.evidence or "",
             "createdAt": existing.updated_at.isoformat() if existing and existing.updated_at else now.isoformat(),
             "updatedAt": now.isoformat(),
@@ -79,22 +85,87 @@ class ChromaSemanticMemoryStore:
         return SemanticMemoryRecord(
             memory_key=item.memory_key,
             memory_value=merged_value,
-            confidence=item.confidence,
+            confidence=confidence,
             evidence=item.evidence,
             updated_at=now,
         )
+
+    def delete_summary(self, user_id: str, memory_key: str) -> None:
+        self.vector_store.delete_chunks([self.memory_vector_id(user_id, memory_key)])
 
     def memory_vector_id(self, user_id: str, memory_key: str) -> str:
         return f"user-memory:{user_id}:{memory_key}"
 
     def _merge_memory(self, old_value: str, new_value: str) -> str:
-        old_clean = " ".join(old_value.split())
-        new_clean = " ".join(new_value.split())
-        if not old_clean:
-            return new_clean
-        if not new_clean or new_clean in old_clean:
-            return old_clean
-        return f"{old_clean}\n新记忆：{new_clean}"
+        old_fragments = self._memory_fragments(old_value)
+        new_fragments = self._memory_fragments(new_value)
+        if not old_fragments:
+            return self._render_memory_fragments(new_fragments)
+        if not new_fragments:
+            return self._render_memory_fragments(old_fragments)
+
+        merged = old_fragments[:]
+        for fragment in new_fragments:
+            self._merge_fragment(merged, fragment)
+        return self._render_memory_fragments(merged)
+
+    def _merge_fragment(self, fragments: list[str], candidate: str) -> None:
+        candidate_norm = self._normalize_for_compare(candidate)
+        if not candidate_norm:
+            return
+        for index, existing in enumerate(fragments):
+            existing_norm = self._normalize_for_compare(existing)
+            if not existing_norm:
+                continue
+            if candidate_norm == existing_norm or candidate_norm in existing_norm:
+                return
+            if existing_norm in candidate_norm:
+                fragments[index] = candidate
+                return
+            if self._memory_similarity(existing_norm, candidate_norm) >= settings.memory_semantic_merge_similarity_threshold:
+                if len(candidate) > len(existing):
+                    fragments[index] = candidate
+                return
+        fragments.append(candidate)
+
+    def _memory_fragments(self, value: str) -> list[str]:
+        fragments: list[str] = []
+        for raw in MEMORY_FRAGMENT_SPLIT_RE.split(value or ""):
+            fragment = self._clean_memory_fragment(raw)
+            if fragment:
+                fragments.append(fragment)
+        return fragments
+
+    def _clean_memory_fragment(self, value: str) -> str:
+        cleaned = MEMORY_FRAGMENT_PREFIX_RE.sub("", value.strip())
+        cleaned = " ".join(cleaned.split())
+        return cleaned.strip("；;。")
+
+    def _render_memory_fragments(self, fragments: list[str]) -> str:
+        unique: list[str] = []
+        seen: set[str] = set()
+        for fragment in fragments:
+            cleaned = self._clean_memory_fragment(fragment)
+            key = self._normalize_for_compare(cleaned)
+            if cleaned and key not in seen:
+                unique.append(cleaned)
+                seen.add(key)
+
+        max_items = max(1, settings.memory_semantic_merge_max_items)
+        max_chars = max(1, settings.memory_semantic_merge_max_chars)
+        retained = unique[-max_items:]
+        while retained:
+            rendered = "；".join(retained)
+            if len(rendered) <= max_chars or len(retained) == 1:
+                return rendered[:max_chars].rstrip("；;，, ")
+            retained = retained[1:]
+        return ""
+
+    def _normalize_for_compare(self, value: str) -> str:
+        return re.sub(r"\s+", "", value).lower()
+
+    def _memory_similarity(self, left: str, right: str) -> float:
+        return SequenceMatcher(None, left, right).ratio()
 
     def _where_user(self, user_id: str) -> dict[str, Any]:
         return {
