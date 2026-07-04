@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from abc import ABC
+from typing import Any
 
 import pymysql
 
 from FinanceAgent.config import settings
+from FinanceAgent.memory.definitions import STRUCTURED_MEMORY_FIELDS
 from FinanceAgent.memory.models import ChatTurn
 
 
@@ -50,3 +52,53 @@ class AgentChatMemoryStore(BaseStore):
         with self._connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("delete from agent_chat_memory where memory_id = %s", (memory_id,))
+
+
+class UserProfileMemoryStore(BaseStore):
+    fields = tuple(STRUCTURED_MEMORY_FIELDS.keys())
+
+    def get_profile(self, user_id: str) -> dict[str, Any]:
+        selected_fields = ", ".join(self.fields)
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f"select {selected_fields} from user_profile where user_id = %s", (user_id,))
+                row = cursor.fetchone()
+        if not row:
+            return {}
+        return {field: row[index] for index, field in enumerate(self.fields) if row[index] is not None}
+
+    def upsert_profile(self, user_id: str, values: dict[str, Any]) -> dict[str, Any]:
+        cleaned = self._clean_values(values)
+        if not cleaned:
+            return {}
+        columns = ["user_id", *cleaned.keys(), "created_at", "updated_at"]
+        values_sql = ", ".join(["%s"] * (len(cleaned) + 1) + ["current_timestamp(6)", "current_timestamp(6)"])
+        update_clause = ", ".join([f"{field} = values({field})" for field in cleaned])
+        sql = f"""
+            insert into user_profile({", ".join(columns)})
+            values ({values_sql})
+            on duplicate key update {update_clause}, updated_at = current_timestamp(6)
+        """
+        params = [user_id, *cleaned.values()]
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(sql, params)
+        return cleaned
+
+    def _clean_values(self, values: dict[str, Any]) -> dict[str, Any]:
+        cleaned: dict[str, Any] = {}
+        for field in self.fields:
+            value = values.get(field)
+            if value is None:
+                continue
+            if isinstance(value, str):
+                value = value.strip()
+                if not value:
+                    continue
+            if field == "age":
+                try:
+                    value = int(value)
+                except (TypeError, ValueError):
+                    continue
+            cleaned[field] = value
+        return cleaned

@@ -185,7 +185,9 @@ class AgentRuntime:
         if state.final_answer:
             return
         snippets = [match.text for match in state.reranked_docs[:3]]
-        build_answer_prompt_context(build_session_context(state), subagent_context, loop_context)
+        answer_context = build_answer_prompt_context(build_session_context(state), subagent_context, loop_context)
+        if answer_context.get("long_term_memory"):
+            snippets.append(json.dumps({"long_term_memory": answer_context["long_term_memory"]}, ensure_ascii=False))
         state.final_answer = self.answering_service.answer_with_context(state.user_message, snippets)
 
     def _sync_loop_state(self, state: GraphState, loop_context: LoopContext) -> None:

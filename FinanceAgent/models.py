@@ -62,6 +62,8 @@ class SessionContext(BaseModel):
     normalized_intent: str
     target_agent: str
     recent_messages: list[dict[str, Any]] = Field(default_factory=list)
+    structured_memory: dict[str, Any] = Field(default_factory=dict)
+    semantic_memory: list[dict[str, Any]] = Field(default_factory=list)
     long_term_memory: list[str] = Field(default_factory=list)
 
 
@@ -179,6 +181,9 @@ class GraphState(BaseModel):
     tool_invocations: list[ToolInvocation] = Field(default_factory=list)
     evidence: list[AgentEvidence] = Field(default_factory=list)
     recent_messages: list[dict[str, Any]] = Field(default_factory=list)
+    structured_memory: dict[str, Any] = Field(default_factory=dict)
+    semantic_memory: list[dict[str, Any]] = Field(default_factory=list)
+    long_term_memory: list[str] = Field(default_factory=list)
     loop_count: int = 0
     stop_reason: str | None = None
     evidence_sufficient: bool = False

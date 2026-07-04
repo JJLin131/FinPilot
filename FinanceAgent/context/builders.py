@@ -16,7 +16,9 @@ def build_session_context(state: GraphState) -> SessionContext:
         normalized_intent=state.normalized_intent,
         target_agent=state.target_agent,
         recent_messages=state.recent_messages[-6:],
-        long_term_memory=[],
+        structured_memory=dict(state.structured_memory),
+        semantic_memory=state.semantic_memory[-8:],
+        long_term_memory=state.long_term_memory[-8:],
     )
 
 
@@ -82,6 +84,10 @@ def build_answer_prompt_context(
         "user_message": session_context.user_message,
         "agent_goal": subagent_context.goal,
         "evidence_sufficient": loop_context.evidence_sufficient,
+        "recent_messages": session_context.recent_messages[-4:],
+        "structured_memory": session_context.structured_memory,
+        "semantic_memory": session_context.semantic_memory[-5:],
+        "long_term_memory": session_context.long_term_memory[-5:],
         "working_notes": loop_context.working_notes[-3:],
         "step_history": [step.model_dump(mode="json") for step in loop_context.step_history[-2:]],
     }

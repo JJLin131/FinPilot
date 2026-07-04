@@ -45,7 +45,7 @@ class FinanceAgentGraph:
                 tenant_id=tenant_id,
                 user_id=user_id,
                 chat_id=chat_id,
-                memory_id=f"finance:{tenant_id}:{user_id}:{chat_id}",
+                memory_id=f"chat:{user_id}:{chat_id}",
                 user_message=content,
             )
             final_state = self.graph.invoke(state.model_dump())
@@ -76,7 +76,7 @@ class FinanceAgentGraph:
                 },
                 tool_calls=graph_state.tool_invocations,
             )
-            self.memory_manager.remember_interaction(state.memory_id, user_id, content, response)
+            self.memory_manager.remember_interaction(state.memory_id, user_id, chat_id, content, response)
             return response
 
     def _build_graph(self):
@@ -101,8 +101,15 @@ class FinanceAgentGraph:
     def _context_load(self, state: dict[str, Any]) -> dict[str, Any]:
         graph_state = GraphState.model_validate(state)
         with self._timed_span(graph_state, "context.load"):
-            memory_context = self.memory_manager.load(graph_state.memory_id, graph_state.user_id)
+            memory_context = self.memory_manager.load(
+                graph_state.memory_id,
+                graph_state.user_id,
+                graph_state.user_message,
+            )
             graph_state.recent_messages = [item.model_dump(mode="json") for item in memory_context.recent_messages]
+            graph_state.structured_memory = dict(memory_context.structured_memory)
+            graph_state.semantic_memory = [item.model_dump(mode="json") for item in memory_context.semantic_memory]
+            graph_state.long_term_memory = list(memory_context.long_term_memory)
             return graph_state.model_dump()
 
     def _intent_classify(self, state: dict[str, Any]) -> dict[str, Any]:

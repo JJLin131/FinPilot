@@ -37,8 +37,15 @@ class Settings(BaseSettings):
     chroma_tenant: str = "default_tenant"
     chroma_database: str = "default_database"
     chroma_finance_collection: str = "finance-knowledge-bge-m3-v1"
+    chroma_memory_collection: str = "finance-user-memory-bge-m3-v1"
     vector_min_score: float = 0.45
     vector_enabled: bool = True
+    memory_extraction_enabled: bool = True
+    memory_min_confidence: float = 0.7
+    memory_semantic_search_enabled: bool = True
+    memory_semantic_search_limit: int = 5
+    memory_semantic_min_score: float = 0.45
+    memory_chroma_timeout_seconds: int = 3
     title_conflict_enabled: bool = True
     title_conflict_min_score: float = 0.82
     title_conflict_search_limit: int = 8
