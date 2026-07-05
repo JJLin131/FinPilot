@@ -95,7 +95,7 @@ def test_chat_handles_slash_commands_and_message(monkeypatch, tmp_path):
         def __init__(self, *args, **kwargs) -> None:
             pass
 
-        def prompt(self, prompt: str) -> str:
+        def prompt(self, prompt: str, **kwargs) -> str:
             return next(prompts)
 
     monkeypatch.setattr(cli, "service_factory", lambda: fake)
@@ -110,6 +110,27 @@ def test_chat_handles_slash_commands_and_message(monkeypatch, tmp_path):
     assert "Slash commands" in result.output
     assert "Debug" in result.output
     assert "New chat" in result.output
+
+
+def test_cli_status_uses_runtime_model_settings(monkeypatch):
+    monkeypatch.setattr(cli.settings, "ai_provider", "deepseek")
+    monkeypatch.setattr(cli.settings, "ai_model_name", "query-model")
+    monkeypatch.setattr(cli.settings, "routing_provider", "deepseek")
+    monkeypatch.setattr(cli.settings, "routing_model_name", "route-model")
+    monkeypatch.setattr(cli.settings, "embedding_model_name", "embed-model")
+    monkeypatch.setattr(cli.settings, "query_rewriter_model_name", "rewrite-model")
+    monkeypatch.setattr(cli.settings, "rag_curation_model_name", "curation-model")
+
+    items = dict(cli._session_status_items("user-1", "chat-1", debug=True))
+
+    assert items["user"] == "user-1"
+    assert items["chat"] == "chat-1"
+    assert items["queryModel"] == "deepseek:query-model"
+    assert items["routeModel"] == "deepseek:route-model"
+    assert items["embeddingModel"] == "embed-model"
+    assert items["rewriteModel"] == "rewrite-model"
+    assert items["curationModel"] == "deepseek:curation-model"
+    assert items["debug"] == "on"
 
 
 def test_doctor_renders_checks(monkeypatch):

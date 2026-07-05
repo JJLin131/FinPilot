@@ -129,14 +129,14 @@ def chat_command(
     _render_help()
     while True:
         try:
-            raw = session.prompt(_prompt_message()).strip()
+            raw = session.prompt(_prompt_message(), rprompt=_prompt_right_border()).strip()
         except (EOFError, KeyboardInterrupt):
             console.print()
             break
 
         if not raw:
             continue
-        command_result = _handle_slash_command(raw, current_chat_id, debug_enabled)
+        command_result = _handle_slash_command(raw, resolved_user_id, current_chat_id, debug_enabled)
         if command_result.exit_requested:
             break
         if command_result.handled:
@@ -219,7 +219,7 @@ class SlashCommandResult:
         self.debug = debug
 
 
-def _handle_slash_command(raw: str, chat_id: str, debug: bool) -> SlashCommandResult:
+def _handle_slash_command(raw: str, user_id: str, chat_id: str, debug: bool) -> SlashCommandResult:
     if not raw.startswith("/"):
         return SlashCommandResult(handled=False, exit_requested=False, chat_id=chat_id, debug=debug)
 
@@ -242,7 +242,7 @@ def _handle_slash_command(raw: str, chat_id: str, debug: bool) -> SlashCommandRe
             debug = not debug
         _render_system_notice("Debug", "on" if debug else "off")
     elif command == "/context":
-        _render_system_notice("Session", f"chat_id={chat_id}\ndebug={'on' if debug else 'off'}")
+        _render_context(user_id, chat_id, debug)
     elif command == "/clear":
         clear_terminal()
     else:
@@ -300,12 +300,10 @@ def _render_splash(user_id: str, chat_id: str, debug: bool) -> None:
     grid.add_column()
     grid.add_row("author", f"[white]{AUTHOR}[/]")
     grid.add_row("version", f"[white]{_app_version()}[/]")
-    grid.add_row("user", f"[white]{user_id}[/]")
-    grid.add_row("chat", f"[white]{chat_id}[/]")
-    grid.add_row("model", f"[white]{_model_label()}[/]")
+    for label, value in _session_status_items(user_id, chat_id, debug):
+        grid.add_row(label, f"[white]{value}[/]")
     grid.add_row("knowledge", "[white]shared finance knowledge[/]")
     grid.add_row("memory", "[white]user scoped[/]")
-    grid.add_row("debug", "[green]on[/]" if debug else "[dim]off[/]")
     body = Group(
         Align.center(art),
         "[bold white]FinPilot Chat[/] [dim]finance agent CLI / local interactive session[/]",
@@ -319,6 +317,24 @@ def _render_splash(user_id: str, chat_id: str, debug: bool) -> None:
             border_style="bright_yellow",
             box=box.ROUNDED,
             width=_panel_width(88),
+            expand=False,
+        )
+    )
+
+
+def _render_context(user_id: str, chat_id: str, debug: bool) -> None:
+    table = Table(title="Runtime context", box=box.ROUNDED, border_style="bright_yellow", width=_panel_width(92))
+    table.add_column("Setting", style="bright_yellow")
+    table.add_column("Value", style="white")
+    for label, value in _session_status_items(user_id, chat_id, debug):
+        table.add_row(label, value)
+    console.print(
+        Panel(
+            table,
+            title="[bold bright_yellow]Session[/]",
+            border_style="bright_yellow",
+            box=box.ROUNDED,
+            width=_panel_width(96),
             expand=False,
         )
     )
@@ -489,23 +505,30 @@ def _new_chat_id() -> str:
 
 
 def _input_status_toolbar(user_id: str, chat_id: str, debug: bool) -> HTML:
-    return HTML(f"<prompt.status>{escape(_frame_line('╰', f' {_input_status(user_id, chat_id, debug)} ', '╯'))}</prompt.status>")
+    width = _input_frame_width()
+    lines = [_frame_line("╰", "", "╯", width=width), *_status_toolbar_lines(user_id, chat_id, debug)]
+    return HTML(f"<prompt.status>{escape('\n'.join(lines))}</prompt.status>")
 
 
-def _frame_line(left: str, label: str, right: str) -> str:
-    width = _panel_width()
+def _frame_line(left: str, label: str, right: str, *, width: int | None = None) -> str:
+    width = width or _panel_width()
     inner_width = width - 2
+    label = f" {label.strip()} " if label.strip() else ""
     if len(label) > inner_width:
         label = label[: max(0, inner_width - 1)] + "…"
     return left + label + ("─" * max(0, inner_width - len(label))) + right
 
 
 def _prompt_message() -> HTML:
-    top = escape(_frame_line("╭", " Input ", "╮"))
+    top = escape(_frame_line("╭", "Input", "╮", width=_input_frame_width()))
     return HTML(
         f"<prompt.frame>{top}</prompt.frame>\n"
         "<prompt.frame>│</prompt.frame> <prompt.user>You</prompt.user> <prompt.symbol>›</prompt.symbol> "
     )
+
+
+def _prompt_right_border() -> HTML:
+    return HTML("<prompt.frame>│</prompt.frame>")
 
 
 def _prompt_style() -> Style:
@@ -519,11 +542,54 @@ def _prompt_style() -> Style:
     )
 
 
-def _input_status(user_id: str, chat_id: str, debug: bool) -> str:
-    return (
-        f"user={user_id}  chat={chat_id}  model={_model_label()}  "
-        f"knowledge=shared  memory=user  debug={'on' if debug else 'off'}"
-    )
+def _status_toolbar_lines(user_id: str, chat_id: str, debug: bool) -> list[str]:
+    return _wrap_status_items(_session_status_items(user_id, chat_id, debug), width=_input_frame_width())
+
+
+def _wrap_status_items(items: list[tuple[str, str]], *, width: int) -> list[str]:
+    segments = [f"{label}={value}" for label, value in items]
+    lines: list[str] = []
+    current = ""
+    for segment in segments:
+        candidate = segment if not current else f"{current}  {segment}"
+        if len(candidate) <= width:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+        current = segment
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _session_status_items(user_id: str, chat_id: str, debug: bool) -> list[tuple[str, str]]:
+    return [
+        ("user", user_id),
+        ("chat", chat_id),
+        ("queryModel", _model_label()),
+        ("routeModel", _enabled_provider_model(settings.routing_llm_enabled, settings.routing_provider, settings.routing_model_name)),
+        ("embeddingModel", _enabled_value(settings.vector_enabled, settings.embedding_model_name)),
+        ("rewriteModel", _enabled_value(settings.query_rewriter_enabled, settings.query_rewriter_model_name)),
+        (
+            "curationModel",
+            _enabled_provider_model(
+                settings.rag_curation_enabled,
+                settings.rag_curation_provider,
+                settings.rag_curation_model_name,
+            ),
+        ),
+        ("reranker", "on" if settings.reranker_enabled else "off"),
+        ("debug", "on" if debug else "off"),
+    ]
+
+
+def _enabled_provider_model(enabled: bool, provider: str, model_name: str) -> str:
+    return _enabled_value(enabled, f"{provider}:{model_name}")
+
+
+def _enabled_value(enabled: bool, value: str) -> str:
+    return value if enabled else f"off:{value}"
 
 
 def _panel_width(preferred: int = 96) -> int:
@@ -531,6 +597,13 @@ def _panel_width(preferred: int = 96) -> int:
     if terminal_width <= 40:
         return max(24, terminal_width - 2)
     return min(preferred, terminal_width - 4)
+
+
+def _input_frame_width() -> int:
+    terminal_width = console.width or 88
+    if terminal_width <= 40:
+        return max(24, terminal_width - 1)
+    return terminal_width - 2
 
 
 def _model_label() -> str:
