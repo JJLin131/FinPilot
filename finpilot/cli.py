@@ -7,21 +7,24 @@ import io
 import uuid
 import warnings
 from collections.abc import Callable
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx
 import typer
-from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit import PromptSession
+from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.shortcuts import clear as clear_terminal
 from prompt_toolkit.styles import Style
 from rich import box
+from rich.align import Align
 from rich.console import Console, Group
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from finpilot.config import settings
 from finpilot.models import AgentChatResponse
@@ -40,6 +43,8 @@ logging.getLogger("finpilot").setLevel(logging.ERROR)
 logging.getLogger("opentelemetry").setLevel(logging.ERROR)
 
 BRAND = "FinPilot"
+AUTHOR = "JJLin131"
+PACKAGE_NAME = "finpilot"
 THINKING_TEXT = "[bold cyan]FinPilot is thinking[/] [dim]routing / retrieving / composing[/]"
 ServiceFactory = Callable[[], "FinPilotService"]
 
@@ -114,11 +119,13 @@ def chat_command(
     debug_enabled = debug
     session = PromptSession(history=FileHistory(str(_history_path())), style=_prompt_style())
 
-    _render_chat_header(resolved_user_id, current_chat_id, debug_enabled)
+    _render_splash(resolved_user_id, current_chat_id, debug_enabled)
     _render_help()
     while True:
         try:
+            _render_input_top()
             raw = session.prompt(_prompt_message()).strip()
+            _render_input_bottom(resolved_user_id, current_chat_id, debug_enabled)
         except (EOFError, KeyboardInterrupt):
             console.print()
             break
@@ -273,27 +280,47 @@ def _create_service() -> FinPilotService:
     return service_factory()
 
 
-def _render_chat_header(user_id: str, chat_id: str, debug: bool) -> None:
+def _render_splash(user_id: str, chat_id: str, debug: bool) -> None:
+    art = Text(
+        "\n".join(
+            [
+                " ______ _       ____  _ _       _",
+                "|  ____(_)     |  _ \\(_) |     | |",
+                "| |__   _ _ __ | |_) |_| | ___ | |_",
+                "|  __| | | '_ \\|  ___/ | |/ _ \\| __|",
+                "| |    | | | | | |   | | | (_) | |_",
+                "|_|    |_|_| |_|_|   |_|_|\\___/ \\__|",
+            ]
+        ),
+        style="bold cyan",
+        justify="center",
+    )
     grid = Table.grid(padding=(0, 2))
-    grid.add_column(style="bold cyan")
+    grid.add_column(style="bold cyan", justify="right")
     grid.add_column()
+    grid.add_row("author", f"[white]{AUTHOR}[/]")
+    grid.add_row("version", f"[white]{_app_version()}[/]")
     grid.add_row("user", f"[white]{user_id}[/]")
     grid.add_row("chat", f"[white]{chat_id}[/]")
+    grid.add_row("model", f"[white]{_model_label()}[/]")
+    grid.add_row("knowledge", "[white]shared finance knowledge[/]")
+    grid.add_row("memory", "[white]user scoped[/]")
     grid.add_row("debug", "[green]on[/]" if debug else "[dim]off[/]")
     body = Group(
-        "[bold cyan]FinPilot Chat[/] [dim]local agent session[/]",
+        Align.center(art),
+        "[bold white]FinPilot Chat[/] [dim]finance agent CLI / local interactive session[/]",
         grid,
         "[dim]Type /help for commands, /exit to leave.[/]",
     )
-    console.print(Panel.fit(body, title=BRAND, border_style="cyan", box=box.ASCII))
+    console.print(Panel.fit(body, title=f"[bold cyan]{BRAND}[/]", border_style="cyan", box=box.ROUNDED))
 
 
 def _render_system_notice(title: str, message: str) -> None:
-    console.print(Panel.fit(message, title=f"[yellow]{title}[/]", border_style="yellow", box=box.ASCII))
+    console.print(Panel.fit(message, title=f"[yellow]{title}[/]", border_style="yellow", box=box.ROUNDED))
 
 
 def _render_user_message(content: str) -> None:
-    console.print(Panel(content, title="[green]You[/]", title_align="left", border_style="green", expand=False, box=box.ASCII))
+    console.print(Panel(content, title="[green]You[/]", title_align="left", border_style="green", expand=False, box=box.ROUNDED))
 
 
 def _render_response(response: AgentChatResponse, *, debug: bool) -> None:
@@ -304,11 +331,11 @@ def _render_response(response: AgentChatResponse, *, debug: bool) -> None:
             title_align="left",
             border_style="cyan",
             expand=False,
-            box=box.ASCII,
+            box=box.ROUNDED,
         )
     )
     if response.evidence:
-        table = Table(title="Evidence", box=box.ASCII, border_style="blue")
+        table = Table(title="Evidence", box=box.ROUNDED, border_style="blue")
         table.add_column("Tool", style="cyan")
         table.add_column("Source", style="green")
         table.add_column("Summary", style="white")
@@ -322,7 +349,7 @@ def _render_response(response: AgentChatResponse, *, debug: bool) -> None:
 
 def _render_debug(response: AgentChatResponse) -> None:
     route = response.route
-    route_table = Table(title="Route", box=box.ASCII, border_style="magenta")
+    route_table = Table(title="Route", box=box.ROUNDED, border_style="magenta")
     route_table.add_column("Intent", style="cyan")
     route_table.add_column("Target", style="green")
     route_table.add_column("Confidence", style="yellow")
@@ -330,7 +357,7 @@ def _render_debug(response: AgentChatResponse) -> None:
     route_table.add_row(route.normalized_intent, route.target_agent, f"{route.confidence:.2f}", route.fallback_cause)
     console.print(route_table)
     if response.tool_calls:
-        tool_table = Table(title="Tool calls", box=box.ASCII, border_style="magenta")
+        tool_table = Table(title="Tool calls", box=box.ROUNDED, border_style="magenta")
         tool_table.add_column("Step", style="dim")
         tool_table.add_column("Tool", style="cyan")
         tool_table.add_column("Status", style="green")
@@ -352,7 +379,7 @@ def _render_debug(response: AgentChatResponse) -> None:
 
 
 def _render_help() -> None:
-    table = Table(title="Slash commands", box=box.ASCII, border_style="blue")
+    table = Table(title="Slash commands", box=box.ROUNDED, border_style="blue")
     table.add_column("Command", style="cyan")
     table.add_column("Action", style="white")
     table.add_row("/help", "Show commands")
@@ -366,7 +393,7 @@ def _render_help() -> None:
             Group(table),
             title="[blue]Help[/]",
             border_style="blue",
-            box=box.ASCII,
+            box=box.ROUNDED,
             expand=False,
         )
     )
@@ -412,8 +439,28 @@ def _new_chat_id() -> str:
     return f"cli-{uuid.uuid4().hex[:12]}"
 
 
+def _render_input_top() -> None:
+    console.print(_frame_line("╭", " Input ", "╮"), style="cyan")
+
+
+def _render_input_bottom(user_id: str, chat_id: str, debug: bool) -> None:
+    status = (
+        f"user={user_id}  chat={chat_id}  model={_model_label()}  "
+        f"knowledge=shared  memory=user  debug={'on' if debug else 'off'}"
+    )
+    console.print(_frame_line("╰", f" {status} ", "╯"), style="cyan")
+
+
+def _frame_line(left: str, label: str, right: str) -> str:
+    width = max(72, min(console.width or 88, 120))
+    inner_width = width - 2
+    if len(label) > inner_width:
+        label = label[: max(0, inner_width - 1)] + "…"
+    return left + label + ("─" * max(0, inner_width - len(label))) + right
+
+
 def _prompt_message() -> HTML:
-    return HTML('<prompt.user>You</prompt.user> <prompt.symbol>></prompt.symbol> ')
+    return HTML('<prompt.border>│</prompt.border> <prompt.user>You</prompt.user> <prompt.symbol>›</prompt.symbol> ')
 
 
 def _prompt_style() -> Style:
@@ -421,8 +468,20 @@ def _prompt_style() -> Style:
         {
             "prompt.user": "ansigreen bold",
             "prompt.symbol": "ansicyan bold",
+            "prompt.border": "ansicyan",
         }
     )
+
+
+def _model_label() -> str:
+    return f"{settings.ai_provider}:{settings.ai_model_name}"
+
+
+def _app_version() -> str:
+    try:
+        return version(PACKAGE_NAME)
+    except PackageNotFoundError:
+        return "0.1.0"
 
 
 def _history_path() -> Path:
