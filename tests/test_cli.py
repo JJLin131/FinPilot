@@ -69,6 +69,8 @@ def test_ask_passes_user_chat_and_question(monkeypatch):
     assert result.exit_code == 0
     assert fake.calls == [("user-1", "chat-1", "工资发放审批规则是什么？")]
     assert fake.shutdown_called
+    assert "You" in result.output
+    assert "FinPilot" in result.output
     assert "工资发放需要审批" in result.output
 
 
@@ -104,6 +106,8 @@ def test_chat_handles_slash_commands_and_message(monkeypatch, tmp_path):
 
     assert result.exit_code == 0
     assert fake.calls == [("user-1", "chat-1", "hello")]
+    assert "FinPilot Chat" in result.output
+    assert "Slash commands" in result.output
     assert "Debug" in result.output
     assert "New chat" in result.output
 

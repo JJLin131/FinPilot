@@ -12,11 +12,13 @@ from typing import TYPE_CHECKING
 
 import httpx
 import typer
+from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.shortcuts import clear as clear_terminal
+from prompt_toolkit.styles import Style
 from rich import box
-from rich.console import Console
+from rich.console import Console, Group
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
@@ -38,6 +40,7 @@ logging.getLogger("finpilot").setLevel(logging.ERROR)
 logging.getLogger("opentelemetry").setLevel(logging.ERROR)
 
 BRAND = "FinPilot"
+THINKING_TEXT = "[bold cyan]FinPilot is thinking[/] [dim]routing / retrieving / composing[/]"
 ServiceFactory = Callable[[], "FinPilotService"]
 
 console = Console()
@@ -90,12 +93,13 @@ def ask(
         chat_id=chat_id or _new_chat_id(),
         content=content,
         debug=debug,
-        status_message="FinPilot is thinking...",
+        status_message=THINKING_TEXT,
         quiet=json_output,
     )
     if json_output:
         typer.echo(response.model_dump_json(exclude_none=True))
         return
+    _render_user_message(content)
     _render_response(response, debug=debug)
 
 
@@ -108,13 +112,13 @@ def chat_command(
     resolved_user_id = user_id or settings.finpilot_default_user_id
     current_chat_id = chat_id or _new_chat_id()
     debug_enabled = debug
-    session = PromptSession(history=FileHistory(str(_history_path())))
+    session = PromptSession(history=FileHistory(str(_history_path())), style=_prompt_style())
 
-    console.print(Panel.fit(f"{BRAND} ready\nuser={resolved_user_id} chat={current_chat_id}", title=BRAND, box=box.ASCII))
+    _render_chat_header(resolved_user_id, current_chat_id, debug_enabled)
     _render_help()
     while True:
         try:
-            raw = session.prompt("finpilot> ").strip()
+            raw = session.prompt(_prompt_message()).strip()
         except (EOFError, KeyboardInterrupt):
             console.print()
             break
@@ -129,12 +133,13 @@ def chat_command(
             debug_enabled = command_result.debug
             continue
 
+        _render_user_message(raw)
         response = _run_chat(
             user_id=resolved_user_id,
             chat_id=current_chat_id,
             content=raw,
             debug=debug_enabled,
-            status_message="FinPilot is working...",
+            status_message=THINKING_TEXT,
         )
         _render_response(response, debug=debug_enabled)
 
@@ -216,7 +221,7 @@ def _handle_slash_command(raw: str, chat_id: str, debug: bool) -> SlashCommandRe
         _render_help()
     elif command == "/new":
         chat_id = argument or _new_chat_id()
-        console.print(f"[green]New chat:[/] {chat_id}")
+        _render_system_notice("New chat", f"chat_id={chat_id}")
     elif command == "/debug":
         if argument.lower() in {"on", "true", "1"}:
             debug = True
@@ -224,10 +229,9 @@ def _handle_slash_command(raw: str, chat_id: str, debug: bool) -> SlashCommandRe
             debug = False
         else:
             debug = not debug
-        console.print(f"[green]Debug:[/] {'on' if debug else 'off'}")
+        _render_system_notice("Debug", "on" if debug else "off")
     elif command == "/context":
-        console.print(f"[cyan]chat_id[/]: {chat_id}")
-        console.print(f"[cyan]debug[/]: {'on' if debug else 'off'}")
+        _render_system_notice("Session", f"chat_id={chat_id}\ndebug={'on' if debug else 'off'}")
     elif command == "/clear":
         clear_terminal()
     else:
@@ -251,7 +255,7 @@ def _run_chat(
         if quiet:
             response = service.chat(user_id, chat_id, content)
         else:
-            with console.status(status_message):
+            with console.status(status_message, spinner="dots", spinner_style="cyan"):
                 response = service.chat(user_id, chat_id, content)
     except Exception as exc:
         _fail(f"Chat failed: {exc}")
@@ -269,13 +273,45 @@ def _create_service() -> FinPilotService:
     return service_factory()
 
 
+def _render_chat_header(user_id: str, chat_id: str, debug: bool) -> None:
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold cyan")
+    grid.add_column()
+    grid.add_row("user", f"[white]{user_id}[/]")
+    grid.add_row("chat", f"[white]{chat_id}[/]")
+    grid.add_row("debug", "[green]on[/]" if debug else "[dim]off[/]")
+    body = Group(
+        "[bold cyan]FinPilot Chat[/] [dim]local agent session[/]",
+        grid,
+        "[dim]Type /help for commands, /exit to leave.[/]",
+    )
+    console.print(Panel.fit(body, title=BRAND, border_style="cyan", box=box.ASCII))
+
+
+def _render_system_notice(title: str, message: str) -> None:
+    console.print(Panel.fit(message, title=f"[yellow]{title}[/]", border_style="yellow", box=box.ASCII))
+
+
+def _render_user_message(content: str) -> None:
+    console.print(Panel(content, title="[green]You[/]", title_align="left", border_style="green", expand=False, box=box.ASCII))
+
+
 def _render_response(response: AgentChatResponse, *, debug: bool) -> None:
-    console.print(Panel(Markdown(response.answer or "(empty answer)"), title=BRAND, expand=False, box=box.ASCII))
+    console.print(
+        Panel(
+            Markdown(response.answer or "(empty answer)"),
+            title=f"[cyan]{BRAND}[/]",
+            title_align="left",
+            border_style="cyan",
+            expand=False,
+            box=box.ASCII,
+        )
+    )
     if response.evidence:
-        table = Table(title="Evidence", box=box.ASCII)
-        table.add_column("Tool")
-        table.add_column("Source")
-        table.add_column("Summary")
+        table = Table(title="Evidence", box=box.ASCII, border_style="blue")
+        table.add_column("Tool", style="cyan")
+        table.add_column("Source", style="green")
+        table.add_column("Summary", style="white")
         for item in response.evidence:
             summary = item.summary.get("document_id") or item.summary.get("title") or json.dumps(item.summary, ensure_ascii=False)
             table.add_row(item.tool_name, item.source, str(summary))
@@ -286,19 +322,19 @@ def _render_response(response: AgentChatResponse, *, debug: bool) -> None:
 
 def _render_debug(response: AgentChatResponse) -> None:
     route = response.route
-    route_table = Table(title="Route", box=box.ASCII)
-    route_table.add_column("Intent")
-    route_table.add_column("Target")
-    route_table.add_column("Confidence")
-    route_table.add_column("Fallback")
+    route_table = Table(title="Route", box=box.ASCII, border_style="magenta")
+    route_table.add_column("Intent", style="cyan")
+    route_table.add_column("Target", style="green")
+    route_table.add_column("Confidence", style="yellow")
+    route_table.add_column("Fallback", style="white")
     route_table.add_row(route.normalized_intent, route.target_agent, f"{route.confidence:.2f}", route.fallback_cause)
     console.print(route_table)
     if response.tool_calls:
-        tool_table = Table(title="Tool calls", box=box.ASCII)
-        tool_table.add_column("Step")
-        tool_table.add_column("Tool")
-        tool_table.add_column("Status")
-        tool_table.add_column("Duration")
+        tool_table = Table(title="Tool calls", box=box.ASCII, border_style="magenta")
+        tool_table.add_column("Step", style="dim")
+        tool_table.add_column("Tool", style="cyan")
+        tool_table.add_column("Status", style="green")
+        tool_table.add_column("Duration", style="yellow")
         tool_table.add_column("Summary")
         for tool in response.tool_calls:
             tool_table.add_row(
@@ -316,16 +352,24 @@ def _render_debug(response: AgentChatResponse) -> None:
 
 
 def _render_help() -> None:
-    table = Table(title="Commands", box=box.ASCII)
+    table = Table(title="Slash commands", box=box.ASCII, border_style="blue")
     table.add_column("Command", style="cyan")
-    table.add_column("Action")
+    table.add_column("Action", style="white")
     table.add_row("/help", "Show commands")
     table.add_row("/new [chat-id]", "Start a new conversation")
     table.add_row("/debug on|off", "Toggle debug output")
     table.add_row("/context", "Show current chat settings")
     table.add_row("/clear", "Clear terminal")
     table.add_row("/exit", "Leave chat")
-    console.print(table)
+    console.print(
+        Panel(
+            Group(table),
+            title="[blue]Help[/]",
+            border_style="blue",
+            box=box.ASCII,
+            expand=False,
+        )
+    )
 
 
 def _add_mysql_check(table: Table) -> None:
@@ -366,6 +410,19 @@ def _add_check(table: Table, name: str, ok: bool, details: str) -> None:
 
 def _new_chat_id() -> str:
     return f"cli-{uuid.uuid4().hex[:12]}"
+
+
+def _prompt_message() -> HTML:
+    return HTML('<prompt.user>You</prompt.user> <prompt.symbol>></prompt.symbol> ')
+
+
+def _prompt_style() -> Style:
+    return Style.from_dict(
+        {
+            "prompt.user": "ansigreen bold",
+            "prompt.symbol": "ansicyan bold",
+        }
+    )
 
 
 def _history_path() -> Path:
