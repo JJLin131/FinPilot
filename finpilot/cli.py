@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
+import contextlib
+import io
 import uuid
 import warnings
 from collections.abc import Callable
@@ -30,6 +33,9 @@ warnings.filterwarnings(
     message="The default value of `allowed_objects` will change*",
     category=Warning,
 )
+logging.basicConfig(level=logging.ERROR, format="%(levelname)s: %(message)s")
+logging.getLogger("finpilot").setLevel(logging.ERROR)
+logging.getLogger("opentelemetry").setLevel(logging.ERROR)
 
 BRAND = "FinPilot"
 ServiceFactory = Callable[[], "FinPilotService"]
@@ -46,12 +52,22 @@ app.add_typer(knowledge_app, name="knowledge")
 
 
 def _default_service_factory() -> "FinPilotService":
-    from finpilot.agent.service import FinPilotService
+    _configure_cli_runtime()
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        from finpilot.agent.service import FinPilotService
 
-    return FinPilotService()
+        return FinPilotService()
 
 
 service_factory: ServiceFactory = _default_service_factory
+
+
+def _configure_cli_runtime() -> None:
+    if not settings.finpilot_cli_otel_enabled:
+        settings.otel_enabled = False
+        settings.otel_exporter_otlp_endpoint = None
 
 
 def main() -> None:

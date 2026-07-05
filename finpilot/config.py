@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     app_env: str = "local"
     app_port: int = 8099
     finpilot_default_user_id: str = "cli-user"
+    finpilot_cli_otel_enabled: bool = False
 
     deepseek_base_url: str = "https://api.deepseek.com/v1"
     deepseek_api_key: str | None = None
