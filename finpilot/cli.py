@@ -2,37 +2,56 @@ from __future__ import annotations
 
 import json
 import uuid
+import warnings
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 import typer
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.shortcuts import clear as clear_terminal
+from rich import box
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 
-from finpilot.agent.service import FinPilotService
 from finpilot.config import settings
 from finpilot.models import AgentChatResponse
 from finpilot.mysql import connect_runtime_mysql
 
+if TYPE_CHECKING:
+    from finpilot.agent.service import FinPilotService
+
+warnings.filterwarnings(
+    "ignore",
+    message="The default value of `allowed_objects` will change*",
+    category=Warning,
+)
+
 BRAND = "FinPilot"
-ServiceFactory = Callable[[], FinPilotService]
+ServiceFactory = Callable[[], "FinPilotService"]
 
 console = Console()
 app = typer.Typer(
     name="finpilot",
     help="FinPilot command line assistant.",
     no_args_is_help=True,
+    rich_markup_mode=None,
 )
-knowledge_app = typer.Typer(help="Manage shared FinPilot knowledge resources.")
+knowledge_app = typer.Typer(help="Manage shared FinPilot knowledge resources.", rich_markup_mode=None)
 app.add_typer(knowledge_app, name="knowledge")
 
-service_factory: ServiceFactory = FinPilotService
+
+def _default_service_factory() -> "FinPilotService":
+    from finpilot.agent.service import FinPilotService
+
+    return FinPilotService()
+
+
+service_factory: ServiceFactory = _default_service_factory
 
 
 def main() -> None:
@@ -75,7 +94,7 @@ def chat_command(
     debug_enabled = debug
     session = PromptSession(history=FileHistory(str(_history_path())))
 
-    console.print(Panel.fit(f"{BRAND} ready\nuser={resolved_user_id} chat={current_chat_id}", title=BRAND))
+    console.print(Panel.fit(f"{BRAND} ready\nuser={resolved_user_id} chat={current_chat_id}", title=BRAND, box=box.ASCII))
     _render_help()
     while True:
         try:
@@ -106,7 +125,7 @@ def chat_command(
 
 @app.command()
 def doctor() -> None:
-    table = Table(title="FinPilot doctor")
+    table = Table(title="FinPilot doctor", box=box.ASCII)
     table.add_column("Check", style="cyan")
     table.add_column("Status")
     table.add_column("Details")
@@ -150,7 +169,7 @@ def bootstrap_knowledge() -> None:
         if service is not None:
             service.shutdown()
 
-    table = Table(title="Knowledge bootstrap")
+    table = Table(title="Knowledge bootstrap", box=box.ASCII)
     table.add_column("Document")
     table.add_column("Domain")
     table.add_column("Status")
@@ -235,9 +254,9 @@ def _create_service() -> FinPilotService:
 
 
 def _render_response(response: AgentChatResponse, *, debug: bool) -> None:
-    console.print(Panel(Markdown(response.answer or "(empty answer)"), title=BRAND, expand=False))
+    console.print(Panel(Markdown(response.answer or "(empty answer)"), title=BRAND, expand=False, box=box.ASCII))
     if response.evidence:
-        table = Table(title="Evidence")
+        table = Table(title="Evidence", box=box.ASCII)
         table.add_column("Tool")
         table.add_column("Source")
         table.add_column("Summary")
@@ -251,7 +270,7 @@ def _render_response(response: AgentChatResponse, *, debug: bool) -> None:
 
 def _render_debug(response: AgentChatResponse) -> None:
     route = response.route
-    route_table = Table(title="Route")
+    route_table = Table(title="Route", box=box.ASCII)
     route_table.add_column("Intent")
     route_table.add_column("Target")
     route_table.add_column("Confidence")
@@ -259,7 +278,7 @@ def _render_debug(response: AgentChatResponse) -> None:
     route_table.add_row(route.normalized_intent, route.target_agent, f"{route.confidence:.2f}", route.fallback_cause)
     console.print(route_table)
     if response.tool_calls:
-        tool_table = Table(title="Tool calls")
+        tool_table = Table(title="Tool calls", box=box.ASCII)
         tool_table.add_column("Step")
         tool_table.add_column("Tool")
         tool_table.add_column("Status")
@@ -281,7 +300,7 @@ def _render_debug(response: AgentChatResponse) -> None:
 
 
 def _render_help() -> None:
-    table = Table(title="Commands")
+    table = Table(title="Commands", box=box.ASCII)
     table.add_column("Command", style="cyan")
     table.add_column("Action")
     table.add_row("/help", "Show commands")
