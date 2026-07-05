@@ -11,6 +11,7 @@ from finpilot.agent.router import IntentRouter
 from finpilot.agent.subagents import QuerySubAgent, TransferSubAgent
 from finpilot.agent.tools import ToolRegistry
 from finpilot.intents import UNKNOWN_INTENT_ANSWER
+from finpilot.issues import issue_from_tool_failure
 from finpilot.memory.service import MemoryManager
 from finpilot.models import AgentChatResponse, GraphState, RouteDecision
 from finpilot.observability.audit import AuditStore
@@ -54,15 +55,17 @@ class FinPilotGraph:
                 request_id=request_id,
                 trace_id=trace_id,
                 domain="FINANCE",
-                status="SUCCEEDED",
+                status=self._response_status(graph_state),
                 answer=graph_state.final_answer,
                 evidence=graph_state.evidence,
                 route=route,
+                issues=graph_state.issues,
                 route_debug={
                     "classifier_intent": graph_state.classifier_intent,
                     "embedding_top1": graph_state.embedding_top1,
                     "embedding_top2": graph_state.embedding_top2,
                     "fallback_cause": graph_state.fallback_cause,
+                    "issues": [issue.model_dump(mode="json") for issue in graph_state.issues],
                     "latency_breakdown": graph_state.latency_breakdown,
                     "loop_count": graph_state.loop_count,
                     "stop_reason": graph_state.stop_reason,
@@ -114,11 +117,16 @@ class FinPilotGraph:
     def _intent_classify(self, state: dict[str, Any]) -> dict[str, Any]:
         graph_state = GraphState.model_validate(state)
         with self._timed_span(graph_state, "intent.classify"):
-            classifier_intent, reason = self.router.classify(graph_state.user_message)
-            graph_state.classifier_intent = classifier_intent
-            graph_state.route_reason = reason
+            classification = self.router.classify_with_issues(graph_state.user_message)
+            graph_state.classifier_intent = classification.intent
+            graph_state.route_reason = classification.reason
+            graph_state.issues.extend(classification.issues)
             graph_state.raw_intent_json = json.dumps(
-                {"intent": classifier_intent, "reason": reason},
+                {
+                    "intent": classification.intent,
+                    "reason": classification.reason,
+                    "issues": [issue.code for issue in classification.issues],
+                },
                 ensure_ascii=False,
             )
             return graph_state.model_dump()
@@ -143,6 +151,7 @@ class FinPilotGraph:
                 graph_state.embedding_top2,
                 graph_state.semantic_score,
                 graph_state.margin_score,
+                graph_state.issues,
             )
             graph_state.raw_intent_json = decision.raw_intent_json
             graph_state.classifier_intent = decision.classifier_intent
@@ -156,23 +165,34 @@ class FinPilotGraph:
             graph_state.agreement_score = decision.agreement_score
             graph_state.semantic_score = decision.semantic_score
             graph_state.margin_score = decision.margin_score
+            if graph_state.issues and decision.normalized_intent != "UNKNOWN":
+                graph_state.issues = [issue.model_copy(update={"severity": "warning"}) for issue in graph_state.issues]
             return graph_state.model_dump()
 
     def _subagent(self, state: dict[str, Any]) -> dict[str, Any]:
         graph_state = GraphState.model_validate(state)
         with self._timed_span(graph_state, "tool.invoke"):
             if graph_state.normalized_intent == "UNKNOWN":
-                graph_state.final_answer = UNKNOWN_INTENT_ANSWER
+                graph_state.final_answer = self._issue_answer(graph_state) or UNKNOWN_INTENT_ANSWER
                 return graph_state.model_dump()
             if graph_state.target_agent == self.transfer_agent.name:
                 graph_state = self.transfer_agent.handle(graph_state, self.tools)
             else:
                 graph_state = self.query_agent.handle(graph_state, self.tools)
+            graph_state.issues.extend(
+                issue_from_tool_failure(invocation)
+                for invocation in graph_state.tool_invocations
+                if invocation.status == "FAILED"
+            )
             return graph_state.model_dump()
 
     def _answer_compose(self, state: dict[str, Any]) -> dict[str, Any]:
         graph_state = GraphState.model_validate(state)
         with self._timed_span(graph_state, "answer.compose"):
+            if graph_state.issues and not graph_state.evidence:
+                system_answer = self._issue_answer(graph_state)
+                if system_answer:
+                    graph_state.final_answer = system_answer
             if not graph_state.final_answer:
                 graph_state.final_answer = UNKNOWN_INTENT_ANSWER
             graph_state.scores["faithfulness"] = 1.0 if graph_state.evidence else 0.4
@@ -182,8 +202,10 @@ class FinPilotGraph:
         graph_state = GraphState.model_validate(state)
         with self._timed_span(graph_state, "audit.persist"):
             decision = self._to_route(graph_state)
-            if decision.normalized_intent == "UNKNOWN":
+            if decision.normalized_intent == "UNKNOWN" and not graph_state.issues:
                 self.audit_store.record_unknown_intent(graph_state, decision)
+            for issue in graph_state.issues:
+                self.audit_store.record_issue(graph_state, issue)
             for invocation in graph_state.tool_invocations:
                 self.audit_store.record_tool(graph_state, invocation)
             return graph_state.model_dump()
@@ -204,6 +226,24 @@ class FinPilotGraph:
             margin_score=state.margin_score,
             agreement_score=state.agreement_score,
         )
+
+    def _response_status(self, state: GraphState) -> str:
+        # 状态在图执行末端统一收口，避免中间节点把系统故障误标成 unsupported。
+        if state.issues:
+            if state.normalized_intent == "UNKNOWN":
+                return "FAILED"
+            if not state.evidence and any(issue.severity == "error" for issue in state.issues):
+                return "FAILED"
+            return "DEGRADED"
+        if state.normalized_intent == "UNKNOWN":
+            return "UNSUPPORTED"
+        return "SUCCEEDED"
+
+    def _issue_answer(self, state: GraphState) -> str:
+        for issue in state.issues:
+            if issue.severity == "error":
+                return issue.message
+        return state.issues[0].message if state.issues and state.normalized_intent == "UNKNOWN" else ""
 
     def _timed_span(self, state: GraphState, span_name: str):
         class TimedContext:

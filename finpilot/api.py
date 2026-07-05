@@ -7,6 +7,7 @@ from finpilot.evals import EvalRunner
 from finpilot.models import AgentChatResponse, FinPilotChatRequest
 from finpilot.rag.lifecycle import KnowledgeLifecycleService
 from finpilot.rag.models import KnowledgeDocumentRequest, KnowledgeDocumentResult
+from finpilot.responses import prepare_chat_response
 
 
 def create_app() -> FastAPI:
@@ -23,15 +24,11 @@ def create_app() -> FastAPI:
     def shutdown_service():
         service.shutdown()
 
-    @app.post("/api/finance/chat", response_model=AgentChatResponse)
+    @app.post("/api/finance/chat", response_model=AgentChatResponse, response_model_exclude_none=True)
     def finance_chat(request: FinPilotChatRequest, x_debug_trace: str | None = Header(default=None)):
         response = service.chat(request.user_id, request.chat_id, request.content)
         debug_enabled = (x_debug_trace or "").lower() == "true"
-        if not debug_enabled:
-            response.route_debug = None
-            response.retrieval_debug = None
-            response.tool_calls = None
-        return response
+        return prepare_chat_response(response, debug_enabled=debug_enabled)
 
     @app.post("/internal/evals/run/{suite}")
     def run_eval_suite(suite: str):

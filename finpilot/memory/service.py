@@ -125,7 +125,7 @@ class MemoryManager:
             chat_id = self._chat_id_from_memory_id(memory_id)
         if response is None:
             raise ValueError("response is required.")
-        if response.route.normalized_intent != "UNKNOWN":
+        if response.status not in {"FAILED", "UNSUPPORTED"} and response.route.normalized_intent != "UNKNOWN":
             messages = self._load_recent_messages(memory_id)
             messages.extend(
                 [
@@ -258,6 +258,8 @@ class MemoryManager:
         if not settings.memory_extraction_enabled:
             return False
         has_forget_signal = self._has_forget_signal(user_message)
+        if response.status in {"FAILED", "UNSUPPORTED"} and not has_forget_signal:
+            return False
         if response.route.normalized_intent == "UNKNOWN" and not has_forget_signal:
             return False
         if not response.answer.strip():

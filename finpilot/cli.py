@@ -30,6 +30,7 @@ from rich.text import Text
 from finpilot.config import settings
 from finpilot.models import AgentChatResponse
 from finpilot.mysql import connect_runtime_mysql
+from finpilot.responses import prepare_chat_response
 
 if TYPE_CHECKING:
     from finpilot.agent.service import FinPilotService
@@ -272,11 +273,7 @@ def _run_chat(
     finally:
         if service is not None:
             service.shutdown()
-    if not debug:
-        response.route_debug = None
-        response.retrieval_debug = None
-        response.tool_calls = None
-    return response
+    return prepare_chat_response(response, debug_enabled=debug)
 
 
 def _create_service() -> FinPilotService:
@@ -367,6 +364,8 @@ def _render_response(response: AgentChatResponse, *, debug: bool) -> None:
             box=box.ROUNDED,
         )
     )
+    if response.issues:
+        _render_issues(response, debug=debug)
     if response.evidence:
         table = Table(title="Evidence", box=box.ROUNDED, border_style="bright_blue", width=_panel_width())
         table.add_column("Tool", style="cyan")
@@ -378,6 +377,22 @@ def _render_response(response: AgentChatResponse, *, debug: bool) -> None:
         console.print(table)
     if debug:
         _render_debug(response)
+
+
+def _render_issues(response: AgentChatResponse, *, debug: bool) -> None:
+    table = Table(title="Issues", box=box.ROUNDED, border_style="yellow", width=_panel_width())
+    table.add_column("Code", style="yellow")
+    table.add_column("Component", style="cyan")
+    table.add_column("Severity", style="white")
+    table.add_column("Message", style="white")
+    if debug:
+        table.add_column("Detail", style="dim")
+    for issue in response.issues:
+        row = [issue.code, issue.component, issue.severity, issue.message]
+        if debug:
+            row.append(issue.detail or "")
+        table.add_row(*row)
+    console.print(table)
 
 
 def _render_debug(response: AgentChatResponse) -> None:

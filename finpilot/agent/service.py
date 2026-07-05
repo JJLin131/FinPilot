@@ -38,8 +38,14 @@ class FinPilotService:
         score_trace(
             response.trace_id,
             name="runtime.unknown_rate",
-            value=1.0 if response.route.normalized_intent == "UNKNOWN" else 0.0,
-            metadata={"intent": response.route.normalized_intent},
+            value=1.0 if response.status == "UNSUPPORTED" else 0.0,
+            metadata={"intent": response.route.normalized_intent, "status": response.status},
+        )
+        score_trace(
+            response.trace_id,
+            name="runtime.issue_count",
+            value=float(len(response.issues)),
+            metadata={"codes": [issue.code for issue in response.issues], "status": response.status},
         )
         score_trace(
             response.trace_id,

@@ -18,6 +18,15 @@ class AgentEvidence(BaseModel):
     summary: dict[str, Any] = Field(default_factory=dict)
 
 
+class AgentIssue(BaseModel):
+    code: str
+    component: str
+    message: str
+    severity: Literal["warning", "error"] = "error"
+    retryable: bool = False
+    detail: str | None = None
+
+
 class RouteDecision(BaseModel):
     raw_intent_json: str
     normalized_intent: str
@@ -119,6 +128,7 @@ class AgentChatResponse(BaseModel):
     answer: str
     evidence: list[AgentEvidence] = Field(default_factory=list)
     route: RouteDecision
+    issues: list[AgentIssue] = Field(default_factory=list)
     route_debug: dict[str, Any] | None = None
     retrieval_debug: dict[str, Any] | None = None
     tool_calls: list[ToolInvocation] | None = None
@@ -172,6 +182,7 @@ class GraphState(BaseModel):
     semantic_score: float = 0.0
     margin_score: float = 0.0
     agreement_score: float = 0.0
+    issues: list[AgentIssue] = Field(default_factory=list)
     retrieved_docs: list[RagMatch] = Field(default_factory=list)
     reranked_docs: list[RagMatch] = Field(default_factory=list)
     tool_invocations: list[ToolInvocation] = Field(default_factory=list)

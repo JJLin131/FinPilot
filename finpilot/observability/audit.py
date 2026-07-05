@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from finpilot.config import settings
-from finpilot.models import EvalSuiteResult, GraphState, RouteDecision, ToolInvocation
+from finpilot.models import AgentIssue, EvalSuiteResult, GraphState, RouteDecision, ToolInvocation
 from finpilot.mysql import connect_runtime_mysql
 
 
@@ -18,6 +18,10 @@ class AuditStore(ABC):
 
     @abstractmethod
     def record_unknown_intent(self, state: GraphState, decision: RouteDecision) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def record_issue(self, state: GraphState, issue: AgentIssue) -> None:
         raise NotImplementedError
 
     @abstractmethod
@@ -64,6 +68,25 @@ class FileAuditStore(AuditStore):
                 "agreement_score": decision.agreement_score,
                 "final_confidence": decision.confidence,
                 "fallback_cause": decision.fallback_cause,
+            },
+        )
+
+    def record_issue(self, state: GraphState, issue: AgentIssue) -> None:
+        self._append(
+            "agent_issue_audit.jsonl",
+            {
+                "request_id": state.request_id,
+                "trace_id": state.trace_id,
+                "user_id": state.user_id,
+                "domain": "FINANCE",
+                "code": issue.code,
+                "component": issue.component,
+                "message": issue.message,
+                "severity": issue.severity,
+                "retryable": issue.retryable,
+                "detail": issue.detail,
+                "route_intent": state.normalized_intent,
+                "fallback_cause": state.fallback_cause,
             },
         )
 
@@ -151,6 +174,29 @@ class MySqlAuditStore(AuditStore):
                 )
                 cursor.execute(
                     """
+                    create table if not exists agent_issue_audit (
+                        id bigint not null auto_increment primary key,
+                        request_id varchar(64) not null,
+                        trace_id varchar(64) null,
+                        user_id varchar(64) not null,
+                        domain varchar(32) not null,
+                        code varchar(96) not null,
+                        component varchar(128) not null,
+                        message text not null,
+                        severity varchar(32) not null,
+                        retryable tinyint(1) not null,
+                        detail text null,
+                        route_intent varchar(64) null,
+                        fallback_cause varchar(96) null,
+                        created_at datetime(6) not null,
+                        key idx_agent_issue_audit_created (created_at),
+                        key idx_agent_issue_audit_request (request_id),
+                        key idx_agent_issue_audit_code (code)
+                    )
+                    """
+                )
+                cursor.execute(
+                    """
                     create table if not exists agent_trace_feedback (
                         id bigint not null auto_increment primary key,
                         trace_id varchar(64) not null,
@@ -210,6 +256,32 @@ class MySqlAuditStore(AuditStore):
                         decision.agreement_score,
                         decision.confidence,
                         decision.fallback_cause,
+                    ),
+                )
+
+    def record_issue(self, state: GraphState, issue: AgentIssue) -> None:
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    insert into agent_issue_audit
+                    (request_id, trace_id, user_id, domain, code, component, message, severity, retryable, detail,
+                     route_intent, fallback_cause, created_at)
+                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, current_timestamp(6))
+                    """,
+                    (
+                        state.request_id,
+                        state.trace_id,
+                        state.user_id,
+                        "FINANCE",
+                        issue.code,
+                        issue.component,
+                        issue.message,
+                        issue.severity,
+                        1 if issue.retryable else 0,
+                        issue.detail,
+                        state.normalized_intent,
+                        state.fallback_cause,
                     ),
                 )
 

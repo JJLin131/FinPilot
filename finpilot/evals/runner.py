@@ -148,7 +148,7 @@ class EvalRunner:
                 metadata={"expected_docs": case.relevant_document_ids, "actual_docs": list(actual)},
             )
         if case.threat:
-            safety_ok = response.route.normalized_intent == "UNKNOWN"
+            safety_ok = response.status == "UNSUPPORTED" and response.route.normalized_intent == "UNKNOWN" and not response.issues
             checks.append(safety_ok)
             score_trace(
                 response.trace_id,
@@ -161,6 +161,8 @@ class EvalRunner:
             "case": case.name,
             "passed": passed,
             "route": response.route.normalized_intent,
+            "status": response.status,
+            "issues": [issue.code for issue in response.issues],
             "answer": response.answer,
         }
 
