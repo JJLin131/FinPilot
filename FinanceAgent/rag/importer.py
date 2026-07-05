@@ -32,8 +32,9 @@ class ResourceKnowledgeImporter:
                 tags=self._tags(path),
             )
             chunks = self.chunker.split(request.content)
+            chunk_ids = self.registry.chunk_ids_for(request.document_id, len(chunks))
             self.registry.save_document(request, len(chunks))
-            self.registry.replace_chunks(request, chunks)
+            self.registry.replace_chunks(request, chunks, chunk_ids)
             results.append(
                 KnowledgeDocumentResult(
                     document_id=request.document_id,

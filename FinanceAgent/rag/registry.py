@@ -5,8 +5,8 @@ from datetime import date
 
 import pymysql
 
-from FinanceAgent.config import settings
 from FinanceAgent.models import RagMatch
+from FinanceAgent.mysql import connect_runtime_mysql
 from FinanceAgent.rag.models import KnowledgeDocumentRecord, KnowledgeDocumentRequest, KnowledgeDocumentResult
 
 
@@ -15,19 +15,42 @@ class KnowledgeDocumentRegistry:
         self._ensure_schema()
 
     def _connect(self):
-        return pymysql.connect(
-            host=settings.mysql_host,
-            port=settings.mysql_port,
-            user=settings.mysql_user,
-            password=settings.mysql_password,
-            database=settings.mysql_database,
-            charset="utf8mb4",
-            autocommit=True,
-        )
+        return connect_runtime_mysql()
 
     def _ensure_schema(self) -> None:
         with self._connect() as connection:
             with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    create table if not exists knowledge_document (
+                        document_id varchar(191) not null primary key,
+                        domain varchar(32) not null,
+                        tenant_id varchar(128) null,
+                        title varchar(255) not null,
+                        source_uri varchar(500) not null,
+                        content_hash varchar(64) not null,
+                        tags_text text null,
+                        status varchar(32) not null,
+                        valid_from date null,
+                        valid_to date null,
+                        chunk_count int not null,
+                        updated_at datetime(6) not null,
+                        key idx_knowledge_document_scope_status (domain, tenant_id, status),
+                        key idx_knowledge_document_expiry (status, valid_to)
+                    )
+                    """
+                )
+                cursor.execute(
+                    """
+                    create table if not exists knowledge_document_chunk (
+                        document_id varchar(191) not null,
+                        chunk_id varchar(64) not null,
+                        primary key (document_id, chunk_id),
+                        constraint fk_knowledge_document_chunk_document
+                            foreign key (document_id) references knowledge_document(document_id) on delete cascade
+                    )
+                    """
+                )
                 cursor.execute(
                     """
                     create table if not exists knowledge_chunk_content (
@@ -84,13 +107,21 @@ class KnowledgeDocumentRegistry:
                     ),
                 )
 
-    def replace_chunks(self, request: KnowledgeDocumentRequest, chunks: list[str]) -> None:
+    def replace_chunks(
+        self,
+        request: KnowledgeDocumentRequest,
+        chunks: list[str],
+        chunk_ids: list[str] | None = None,
+    ) -> list[str]:
+        resolved_chunk_ids = chunk_ids or self.chunk_ids_for(request.document_id, len(chunks))
+        if len(resolved_chunk_ids) != len(chunks):
+            raise ValueError("chunk_ids length must match chunks length.")
         with self._connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("delete from knowledge_document_chunk where document_id = %s", (request.document_id,))
                 cursor.execute("delete from knowledge_chunk_content where document_id = %s", (request.document_id,))
                 for index, text in enumerate(chunks):
-                    chunk_id = self._chunk_id(request.document_id, index)
+                    chunk_id = resolved_chunk_ids[index]
                     cursor.execute(
                         "insert into knowledge_document_chunk(document_id, chunk_id) values (%s, %s)",
                         (request.document_id, chunk_id),
@@ -113,16 +144,7 @@ class KnowledgeDocumentRegistry:
                             text,
                         ),
                     )
-
-    def replace_chunk_ids(self, document_id: str, chunk_ids: list[str]) -> None:
-        with self._connect() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("delete from knowledge_document_chunk where document_id = %s", (document_id,))
-                for chunk_id in chunk_ids:
-                    cursor.execute(
-                        "insert into knowledge_document_chunk(document_id, chunk_id) values (%s, %s)",
-                        (document_id, chunk_id),
-                    )
+        return resolved_chunk_ids
 
     def chunk_ids(self, document_id: str) -> list[str]:
         with self._connect() as connection:
@@ -216,6 +238,9 @@ class KnowledgeDocumentRegistry:
             with connection.cursor() as cursor:
                 cursor.execute("delete from knowledge_document_chunk where document_id = %s", (document_id,))
                 cursor.execute("delete from knowledge_chunk_content where document_id = %s", (document_id,))
+
+    def chunk_ids_for(self, document_id: str, chunk_count: int) -> list[str]:
+        return [self._chunk_id(document_id, index) for index in range(chunk_count)]
 
     def _chunk_id(self, document_id: str, index: int) -> str:
         return hashlib.sha1(f"{document_id}:{index}".encode("utf-8")).hexdigest()[:32]

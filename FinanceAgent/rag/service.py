@@ -72,11 +72,11 @@ class RagKnowledgeService:
         if old_chunk_ids:
             self._delete_document_vectors_best_effort(curated.document_id, old_chunk_ids)
         chunks = self.chunker.split(curated.content)
-        chunk_ids = [self._chunk_id(curated, index) for index in range(len(chunks))]
+        chunk_ids = self.registry.chunk_ids_for(curated.document_id, len(chunks))
         self._index_vectors_best_effort(curated, chunk_ids, chunks)
         self.bm25_index.replace_document(curated, chunk_ids, chunks)
         self.registry.save_document(curated, len(chunks))
-        self.registry.replace_chunk_ids(curated.document_id, chunk_ids)
+        self.registry.replace_chunks(curated, chunks, chunk_ids)
         return KnowledgeDocumentResult(
             document_id=curated.document_id,
             domain=curated.domain,
@@ -175,9 +175,6 @@ class RagKnowledgeService:
     def _validate(self, request: KnowledgeDocumentRequest) -> None:
         if request.domain == "FINANCE" and not request.tenant_id:
             raise ValueError("Finance knowledge documents require tenant_id.")
-
-    def _chunk_id(self, request: KnowledgeDocumentRequest, index: int) -> str:
-        return f"{request.document_id}:chunk:{index}"
 
     def _resource_document_id(self, file_name: str) -> str:
         return f"resource-finance-{uuid.uuid5(uuid.NAMESPACE_URL, file_name)}"
