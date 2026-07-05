@@ -1,5 +1,5 @@
 services:
-  agent-service:
+  finpilot-service:
     build:
       context: .
       dockerfile: Dockerfile
@@ -145,7 +145,7 @@ services:
       LANGFUSE_INIT_ORG_ID: org-local
       LANGFUSE_INIT_ORG_NAME: Local Org
       LANGFUSE_INIT_PROJECT_ID: project-local
-      LANGFUSE_INIT_PROJECT_NAME: Finance Agent Local
+      LANGFUSE_INIT_PROJECT_NAME: FinPilot Local
       LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-local
       LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-local
       LANGFUSE_INIT_USER_EMAIL: admin@local.dev

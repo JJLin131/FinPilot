@@ -6,7 +6,7 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 COPY pyproject.toml README.md ./
-COPY FinanceAgent ./FinanceAgent
+COPY finpilot ./finpilot
 COPY observability ./observability
 COPY src/main/resources ./src/main/resources
 
@@ -16,4 +16,5 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 EXPOSE 8099
 
-CMD ["python", "-m", "FinanceAgent.main"]
+CMD ["python", "-m", "finpilot.main"]
+

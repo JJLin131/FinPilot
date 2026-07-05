@@ -41,7 +41,6 @@ create table if not exists agent_chat_memory (
 create table if not exists agent_tool_audit (
     id bigint not null auto_increment primary key,
     request_id varchar(64) not null,
-    tenant_id varchar(128) null,
     user_id varchar(64) not null,
     domain varchar(32) not null,
     tool_name varchar(128) not null,
@@ -49,14 +48,13 @@ create table if not exists agent_tool_audit (
     status varchar(32) not null,
     duration_ms bigint not null,
     created_at datetime(6) not null,
-    key idx_agent_tool_audit_tenant_created (tenant_id, created_at),
+    key idx_agent_tool_audit_user_created (user_id, created_at),
     key idx_agent_tool_audit_request (request_id)
 );
 
 create table if not exists unknown_intent_audit (
     id bigint not null auto_increment primary key,
     request_id varchar(64) not null,
-    tenant_id varchar(128) null,
     user_id varchar(64) not null,
     domain varchar(32) not null,
     user_message text not null,
@@ -78,7 +76,6 @@ create table if not exists unknown_intent_audit (
 create table if not exists knowledge_document (
     document_id varchar(191) not null primary key,
     domain varchar(32) not null,
-    tenant_id varchar(128) null,
     title varchar(255) not null,
     source_uri varchar(500) not null,
     content_hash varchar(64) not null,
@@ -88,7 +85,7 @@ create table if not exists knowledge_document (
     valid_to date null,
     chunk_count int not null,
     updated_at datetime(6) not null,
-    key idx_knowledge_document_scope_status (domain, tenant_id, status),
+    key idx_knowledge_document_scope_status (domain, status),
     key idx_knowledge_document_expiry (status, valid_to)
 );
 
@@ -104,7 +101,6 @@ create table if not exists knowledge_chunk_content (
     chunk_id varchar(64) not null primary key,
     document_id varchar(191) not null,
     domain varchar(32) not null,
-    tenant_id varchar(128) null,
     title varchar(255) not null,
     source_uri varchar(500) not null,
     tags_text text null,
@@ -113,7 +109,7 @@ create table if not exists knowledge_chunk_content (
     created_at datetime(6) not null,
     updated_at datetime(6) not null,
     key idx_knowledge_chunk_doc (document_id),
-    key idx_knowledge_chunk_scope (domain, tenant_id)
+    key idx_knowledge_chunk_scope (domain)
 );
 
 create table if not exists agent_eval_run (

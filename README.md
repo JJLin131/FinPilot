@@ -1,29 +1,25 @@
-# Agent Harness
+# FinPilot
 
-Python finance-agent service built with `FastAPI + LangGraph + OpenTelemetry + Langfuse`.
+FinPilot is a finance agent service and CLI built with `FastAPI + LangGraph + RAG + memory + audit + observability`.
 
-The currently supported business path is finance knowledge QA:
+The main business path is finance knowledge QA:
 
 ```text
-POST /api/finance/chat
-  -> FastAPI
-  -> FinanceAgentService
+User
+  -> finpilot CLI or POST /api/finance/chat
+  -> FinPilotService
   -> LangGraph
-  -> context load
+  -> user memory load
   -> intent classify
   -> embedding score
   -> route decide
   -> QueryAgent
-  -> search_finance_knowledge
-  -> query rewrite
-  -> Chroma vector retrieval + BM25 retrieval
-  -> RRF fusion
-  -> remote reranker
+  -> shared finance knowledge retrieval
   -> answer compose
-  -> MySQL audit + optional Langfuse score
+  -> user-scoped memory + audit
 ```
 
-`TransferAgent` is intentionally kept as an unsupported placeholder for now.
+Knowledge is shared across all users and managed by administrators. User isolation applies to chat memory, profile memory, semantic memory, and audit attribution through `user_id + chat_id`.
 
 ## Requirements
 
@@ -36,20 +32,58 @@ POST /api/finance/chat
   - Chroma on `8000`
   - reranker on `8081`
 
-Copy `.env.example` to `.env` and fill in `DEEPSEEK_API_KEY` before Docker startup.
+Copy `.env.example` to `.env` and fill in `DEEPSEEK_API_KEY`.
 
 ## Local Development
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-.\.venv\Scripts\python.exe -m FinanceAgent.main
+.\.venv\Scripts\finpilot.exe doctor
+.\.venv\Scripts\finpilot.exe chat
+```
+
+Run the API service:
+
+```powershell
+.\.venv\Scripts\finpilot.exe serve
 ```
 
 Health check:
 
 ```powershell
 curl http://localhost:8099/healthz
+```
+
+## CLI
+
+Ask one question:
+
+```powershell
+finpilot ask "工资发放审批规则是什么？" --user-id user-1
+```
+
+Start an interactive session:
+
+```powershell
+finpilot chat --user-id user-1
+```
+
+Useful REPL commands:
+
+```text
+/help
+/new [chat-id]
+/debug on
+/context
+/clear
+/exit
+```
+
+Bootstrap shared knowledge resources:
+
+```powershell
+finpilot knowledge bootstrap
 ```
 
 ## Docker Startup
@@ -60,7 +94,7 @@ docker compose up --build
 
 Default ports:
 
-- Agent API: `http://localhost:8099`
+- FinPilot API: `http://localhost:8099`
 - Langfuse UI: `http://localhost:3000`
 - OTel HTTP receiver: `http://localhost:4318`
 - MinIO API: `http://localhost:9090`
@@ -71,7 +105,7 @@ Optional local AI lab profile:
 docker compose --profile ai-lab up --build
 ```
 
-## Knowledge Ingest
+## Shared Knowledge Ingest
 
 Single document ingest:
 
@@ -81,11 +115,10 @@ curl -X POST http://localhost:8099/api/knowledge/documents `
   -d '{
     "document_id": "finance-rule-001",
     "domain": "FINANCE",
-    "tenant_id": "tenant-a",
-    "title": "基金赎回规则",
+    "title": "工资发放审批规则",
     "source": "manual",
-    "content": "基金赎回通常 T+1 到账。",
-    "tags": ["基金", "赎回"]
+    "content": "工资发放通常需要提交审批并完成财务复核。",
+    "tags": ["工资", "审批"]
   }'
 ```
 
@@ -108,7 +141,6 @@ curl -X POST http://localhost:8099/api/finance/chat `
   -H "Content-Type: application/json" `
   -H "X-Debug-Trace: true" `
   -d '{
-    "tenant_id": "tenant-a",
     "user_id": "user-1",
     "chat_id": "chat-1",
     "content": "工资发放审批规则是什么？"
@@ -123,10 +155,10 @@ Runtime code creates the default database when the configured MySQL user has per
 
 - audit tables
 - chat memory and user profile tables
-- knowledge document and chunk tables
+- shared knowledge document and chunk tables
 
-The reference DDL remains in `src/main/resources/schema.sql`.
+Existing databases with older nullable `tenant_id` columns remain compatible; FinPilot no longer writes business tenant data.
 
 ## Evaluation Status
 
-Evaluation runner code is present under `FinanceAgent/evals`, but datasets, pytest coverage, promptfoo config, and helper scripts are intentionally left as TODO work. See `TODO.md`.
+Evaluation runner code is present under `finpilot/evals`, but datasets, pytest coverage, promptfoo config, and helper scripts are intentionally left as TODO work. See `TODO.md`.
