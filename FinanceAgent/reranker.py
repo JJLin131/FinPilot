@@ -27,7 +27,8 @@ class RemoteReranker:
                     },
                 )
                 response.raise_for_status()
-                rows = response.json()
+                payload = response.json()
+                rows = payload.get("results") if isinstance(payload, dict) else payload
             if not isinstance(rows, list) or len(rows) != len(candidates):
                 raise ValueError("Invalid reranker response")
             scores_by_index = {int(item["index"]): float(item["score"]) for item in rows}

@@ -5,7 +5,7 @@ from typing import List
 
 import torch
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sentence_transformers import CrossEncoder
 
 MODEL_NAME = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
@@ -49,7 +49,8 @@ app = FastAPI(title="Cross-Encoder Reranker", lifespan=lifespan)
 
 class RerankRequest(BaseModel):
     query: str
-    documents: List[str]
+    documents: List[str] = Field(default_factory=list)
+    texts: List[str] = Field(default_factory=list)
 
 
 class RerankItem(BaseModel):
@@ -86,17 +87,18 @@ def rerank(req: RerankRequest):
     if not model:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
-    if not req.documents:
+    documents = req.texts or req.documents
+    if not documents:
         raise HTTPException(status_code=400, detail="documents cannot be empty")
 
-    pairs = [(req.query, doc) for doc in req.documents]
+    pairs = [(req.query, doc) for doc in documents]
     scores = model.predict(pairs, show_progress_bar=False)
 
     if hasattr(scores, "tolist"):
         scores = scores.tolist()
 
     results = [
-        RerankItem(index=i, score=float(score), text=req.documents[i])
+        RerankItem(index=i, score=float(score), text=documents[i])
         for i, score in enumerate(scores)
     ]
 
