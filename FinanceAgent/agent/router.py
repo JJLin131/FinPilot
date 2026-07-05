@@ -53,9 +53,19 @@ class IntentRouter:
 
     def route(self, user_message: str) -> RouteDecision:
         classifier_intent, reason = self.classify(user_message)
-        raw_intent_json = json.dumps({"intent": classifier_intent, "reason": reason}, ensure_ascii=False)
         top1, top2, semantic_score, margin_score = self.embedding_score(user_message)
+        return self.route_from_scores(classifier_intent, reason, top1, top2, semantic_score, margin_score)
 
+    def route_from_scores(
+        self,
+        classifier_intent: str,
+        reason: str,
+        top1: str | None,
+        top2: str | None,
+        semantic_score: float,
+        margin_score: float,
+    ) -> RouteDecision:
+        raw_intent_json = json.dumps({"intent": classifier_intent, "reason": reason}, ensure_ascii=False)
         if classifier_intent == "UNKNOWN":
             return self._unknown(raw_intent_json, classifier_intent, reason, "MODEL_RETURNED_UNKNOWN", True, top1, top2)
         if top1 == "UNKNOWN":

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from typing import Any
@@ -118,7 +119,10 @@ class FinanceAgentGraph:
             classifier_intent, reason = self.router.classify(graph_state.user_message)
             graph_state.classifier_intent = classifier_intent
             graph_state.route_reason = reason
-            graph_state.raw_intent_json = f'{{"intent":"{classifier_intent}","reason":"{reason}"}}'
+            graph_state.raw_intent_json = json.dumps(
+                {"intent": classifier_intent, "reason": reason},
+                ensure_ascii=False,
+            )
             return graph_state.model_dump()
 
     def _embedding_score(self, state: dict[str, Any]) -> dict[str, Any]:
@@ -134,7 +138,19 @@ class FinanceAgentGraph:
     def _route_decide(self, state: dict[str, Any]) -> dict[str, Any]:
         graph_state = GraphState.model_validate(state)
         with self._timed_span(graph_state, "route.decide"):
-            decision = self.router.route(graph_state.user_message)
+            decision = self.router.route_from_scores(
+                graph_state.classifier_intent,
+                graph_state.route_reason,
+                graph_state.embedding_top1,
+                graph_state.embedding_top2,
+                graph_state.semantic_score,
+                graph_state.margin_score,
+            )
+            graph_state.raw_intent_json = decision.raw_intent_json
+            graph_state.classifier_intent = decision.classifier_intent
+            graph_state.embedding_top1 = decision.embedding_top1_intent
+            graph_state.embedding_top2 = decision.embedding_top2_intent
+            graph_state.route_reason = decision.reason
             graph_state.normalized_intent = decision.normalized_intent
             graph_state.target_agent = decision.target_agent
             graph_state.route_confidence = decision.confidence
