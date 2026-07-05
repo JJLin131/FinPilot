@@ -8,6 +8,7 @@ from typing import Any
 
 from FinanceAgent.config import settings
 from FinanceAgent.models import EvalSuiteResult, GraphState, RouteDecision, ToolInvocation
+from FinanceAgent.mysql import connect_runtime_mysql
 
 
 class AuditStore(ABC):
@@ -87,17 +88,85 @@ class MySqlAuditStore(AuditStore):
         except ImportError as exc:  # pragma: no cover - runtime guard
             raise RuntimeError("Install pymysql in the project virtual environment to use MySQL audits.") from exc
         self.pymysql = pymysql
+        self._ensure_schema()
 
     def _connect(self):
-        return self.pymysql.connect(
-            host=settings.mysql_host,
-            port=settings.mysql_port,
-            user=settings.mysql_user,
-            password=settings.mysql_password,
-            database=settings.mysql_database,
-            charset="utf8mb4",
-            autocommit=True,
-        )
+        return connect_runtime_mysql(pymysql_module=self.pymysql)
+
+    def _ensure_schema(self) -> None:
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    create table if not exists agent_tool_audit (
+                        id bigint not null auto_increment primary key,
+                        request_id varchar(64) not null,
+                        tenant_id varchar(128) null,
+                        user_id varchar(64) not null,
+                        domain varchar(32) not null,
+                        tool_name varchar(128) not null,
+                        parameter_summary text null,
+                        status varchar(32) not null,
+                        duration_ms bigint not null,
+                        created_at datetime(6) not null,
+                        key idx_agent_tool_audit_tenant_created (tenant_id, created_at),
+                        key idx_agent_tool_audit_request (request_id)
+                    )
+                    """
+                )
+                cursor.execute(
+                    """
+                    create table if not exists unknown_intent_audit (
+                        id bigint not null auto_increment primary key,
+                        request_id varchar(64) not null,
+                        tenant_id varchar(128) null,
+                        user_id varchar(64) not null,
+                        domain varchar(32) not null,
+                        user_message text not null,
+                        raw_intent_json text null,
+                        classifier_intent varchar(64) not null,
+                        embedding_top1_intent varchar(64) null,
+                        embedding_top2_intent varchar(64) null,
+                        reason text not null,
+                        semantic_score double not null,
+                        margin_score double not null,
+                        agreement_score double not null,
+                        final_confidence double not null,
+                        fallback_cause varchar(64) not null,
+                        created_at datetime(6) not null,
+                        key idx_unknown_intent_audit_created (created_at),
+                        key idx_unknown_intent_audit_request (request_id)
+                    )
+                    """
+                )
+                cursor.execute(
+                    """
+                    create table if not exists agent_eval_run (
+                        id bigint not null auto_increment primary key,
+                        suite_name varchar(128) not null,
+                        total_cases int not null,
+                        passed_cases int not null,
+                        score double not null,
+                        details_json longtext null,
+                        created_at datetime(6) not null,
+                        key idx_agent_eval_run_suite_created (suite_name, created_at)
+                    )
+                    """
+                )
+                cursor.execute(
+                    """
+                    create table if not exists agent_trace_feedback (
+                        id bigint not null auto_increment primary key,
+                        trace_id varchar(64) not null,
+                        request_id varchar(64) not null,
+                        rating int not null,
+                        comment text null,
+                        created_at datetime(6) not null,
+                        key idx_agent_trace_feedback_trace (trace_id),
+                        key idx_agent_trace_feedback_request (request_id)
+                    )
+                    """
+                )
 
     def record_tool(self, state: GraphState, invocation: ToolInvocation) -> None:
         with self._connect() as connection:

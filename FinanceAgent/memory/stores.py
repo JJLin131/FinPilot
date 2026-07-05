@@ -4,27 +4,33 @@ import json
 from abc import ABC
 from typing import Any
 
-import pymysql
-
-from FinanceAgent.config import settings
 from FinanceAgent.memory.definitions import STRUCTURED_MEMORY_FIELDS
 from FinanceAgent.memory.models import ChatTurn
+from FinanceAgent.mysql import connect_runtime_mysql
 
 
 class BaseStore(ABC):
     def _connect(self):
-        return pymysql.connect(
-            host=settings.mysql_host,
-            port=settings.mysql_port,
-            user=settings.mysql_user,
-            password=settings.mysql_password,
-            database=settings.mysql_database,
-            charset="utf8mb4",
-            autocommit=True,
-        )
+        return connect_runtime_mysql()
 
 
 class AgentChatMemoryStore(BaseStore):
+    def __init__(self) -> None:
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    create table if not exists agent_chat_memory (
+                        memory_id varchar(255) not null primary key,
+                        messages_json longtext not null,
+                        updated_at datetime(6) not null
+                    )
+                    """
+                )
+
     def get_messages(self, memory_id: str) -> list[ChatTurn]:
         with self._connect() as connection:
             with connection.cursor() as cursor:
@@ -56,6 +62,30 @@ class AgentChatMemoryStore(BaseStore):
 
 class UserProfileMemoryStore(BaseStore):
     fields = tuple(STRUCTURED_MEMORY_FIELDS.keys())
+
+    def __init__(self) -> None:
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    create table if not exists user_profile (
+                        user_id varchar(64) not null primary key,
+                        age int null,
+                        occupation varchar(128) null,
+                        education varchar(64) null,
+                        income_range varchar(64) null,
+                        gender varchar(32) null,
+                        city varchar(64) null,
+                        marital_status varchar(32) null,
+                        notes varchar(255) null,
+                        created_at datetime(6) not null,
+                        updated_at datetime(6) not null
+                    )
+                    """
+                )
 
     def get_profile(self, user_id: str) -> dict[str, Any]:
         selected_fields = ", ".join(self.fields)

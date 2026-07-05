@@ -100,6 +100,22 @@ create table if not exists knowledge_document_chunk (
         foreign key (document_id) references knowledge_document(document_id) on delete cascade
 );
 
+create table if not exists knowledge_chunk_content (
+    chunk_id varchar(64) not null primary key,
+    document_id varchar(191) not null,
+    domain varchar(32) not null,
+    tenant_id varchar(128) null,
+    title varchar(255) not null,
+    source_uri varchar(500) not null,
+    tags_text text null,
+    chunk_index int not null,
+    content longtext not null,
+    created_at datetime(6) not null,
+    updated_at datetime(6) not null,
+    key idx_knowledge_chunk_doc (document_id),
+    key idx_knowledge_chunk_scope (domain, tenant_id)
+);
+
 create table if not exists agent_eval_run (
     id bigint not null auto_increment primary key,
     suite_name varchar(128) not null,
