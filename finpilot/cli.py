@@ -7,6 +7,7 @@ import io
 import uuid
 import warnings
 from collections.abc import Callable
+from html import escape
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -117,15 +118,17 @@ def chat_command(
     resolved_user_id = user_id or settings.finpilot_default_user_id
     current_chat_id = chat_id or _new_chat_id()
     debug_enabled = debug
-    session = PromptSession(history=FileHistory(str(_history_path())), style=_prompt_style())
+    session = PromptSession(
+        history=FileHistory(str(_history_path())),
+        style=_prompt_style(),
+        bottom_toolbar=lambda: _input_status_toolbar(resolved_user_id, current_chat_id, debug_enabled),
+    )
 
     _render_splash(resolved_user_id, current_chat_id, debug_enabled)
     _render_help()
     while True:
         try:
-            _render_input_top()
             raw = session.prompt(_prompt_message()).strip()
-            _render_input_bottom(resolved_user_id, current_chat_id, debug_enabled)
         except (EOFError, KeyboardInterrupt):
             console.print()
             break
@@ -312,30 +315,60 @@ def _render_splash(user_id: str, chat_id: str, debug: bool) -> None:
         grid,
         "[dim]Type /help for commands, /exit to leave.[/]",
     )
-    console.print(Panel.fit(body, title=f"[bold cyan]{BRAND}[/]", border_style="cyan", box=box.ROUNDED))
+    console.print(
+        Panel(
+            body,
+            title=f"[bold bright_yellow]{BRAND}[/]",
+            border_style="bright_yellow",
+            box=box.ROUNDED,
+            width=_panel_width(88),
+            expand=False,
+        )
+    )
 
 
 def _render_system_notice(title: str, message: str) -> None:
-    console.print(Panel.fit(message, title=f"[yellow]{title}[/]", border_style="yellow", box=box.ROUNDED))
+    console.print(
+        Panel(
+            message,
+            title=f"[bold bright_yellow]{title}[/]",
+            border_style="bright_yellow",
+            box=box.ROUNDED,
+            width=_panel_width(84),
+            expand=False,
+        )
+    )
 
 
 def _render_user_message(content: str) -> None:
-    console.print(Panel(content, title="[green]You[/]", title_align="left", border_style="green", expand=False, box=box.ROUNDED))
+    console.print(
+        Panel(
+            Text(content, style="bright_green"),
+            title="[bold bright_green]You[/]",
+            title_align="left",
+            border_style="bright_green",
+            box=box.ROUNDED,
+            width=_panel_width(),
+            expand=False,
+        )
+    )
 
 
 def _render_response(response: AgentChatResponse, *, debug: bool) -> None:
     console.print(
         Panel(
             Markdown(response.answer or "(empty answer)"),
-            title=f"[cyan]{BRAND}[/]",
+            title=f"[bold bright_cyan]{BRAND}[/]",
             title_align="left",
-            border_style="cyan",
+            border_style="bright_cyan",
+            style="white",
+            width=_panel_width(),
             expand=False,
             box=box.ROUNDED,
         )
     )
     if response.evidence:
-        table = Table(title="Evidence", box=box.ROUNDED, border_style="blue")
+        table = Table(title="Evidence", box=box.ROUNDED, border_style="bright_blue", width=_panel_width())
         table.add_column("Tool", style="cyan")
         table.add_column("Source", style="green")
         table.add_column("Summary", style="white")
@@ -349,7 +382,7 @@ def _render_response(response: AgentChatResponse, *, debug: bool) -> None:
 
 def _render_debug(response: AgentChatResponse) -> None:
     route = response.route
-    route_table = Table(title="Route", box=box.ROUNDED, border_style="magenta")
+    route_table = Table(title="Route", box=box.ROUNDED, border_style="magenta", width=_panel_width())
     route_table.add_column("Intent", style="cyan")
     route_table.add_column("Target", style="green")
     route_table.add_column("Confidence", style="yellow")
@@ -357,7 +390,7 @@ def _render_debug(response: AgentChatResponse) -> None:
     route_table.add_row(route.normalized_intent, route.target_agent, f"{route.confidence:.2f}", route.fallback_cause)
     console.print(route_table)
     if response.tool_calls:
-        tool_table = Table(title="Tool calls", box=box.ROUNDED, border_style="magenta")
+        tool_table = Table(title="Tool calls", box=box.ROUNDED, border_style="magenta", width=_panel_width())
         tool_table.add_column("Step", style="dim")
         tool_table.add_column("Tool", style="cyan")
         tool_table.add_column("Status", style="green")
@@ -379,7 +412,7 @@ def _render_debug(response: AgentChatResponse) -> None:
 
 
 def _render_help() -> None:
-    table = Table(title="Slash commands", box=box.ROUNDED, border_style="blue")
+    table = Table(title="Slash commands", box=box.ROUNDED, border_style="bright_blue", width=_panel_width(76) - 4)
     table.add_column("Command", style="cyan")
     table.add_column("Action", style="white")
     table.add_row("/help", "Show commands")
@@ -391,9 +424,10 @@ def _render_help() -> None:
     console.print(
         Panel(
             Group(table),
-            title="[blue]Help[/]",
-            border_style="blue",
+            title="[bold bright_blue]Help[/]",
+            border_style="bright_blue",
             box=box.ROUNDED,
+            width=_panel_width(76),
             expand=False,
         )
     )
@@ -439,20 +473,12 @@ def _new_chat_id() -> str:
     return f"cli-{uuid.uuid4().hex[:12]}"
 
 
-def _render_input_top() -> None:
-    console.print(_frame_line("╭", " Input ", "╮"), style="cyan")
-
-
-def _render_input_bottom(user_id: str, chat_id: str, debug: bool) -> None:
-    status = (
-        f"user={user_id}  chat={chat_id}  model={_model_label()}  "
-        f"knowledge=shared  memory=user  debug={'on' if debug else 'off'}"
-    )
-    console.print(_frame_line("╰", f" {status} ", "╯"), style="cyan")
+def _input_status_toolbar(user_id: str, chat_id: str, debug: bool) -> HTML:
+    return HTML(f"<prompt.status>{escape(_frame_line('╰', f' {_input_status(user_id, chat_id, debug)} ', '╯'))}</prompt.status>")
 
 
 def _frame_line(left: str, label: str, right: str) -> str:
-    width = max(72, min(console.width or 88, 120))
+    width = _panel_width()
     inner_width = width - 2
     if len(label) > inner_width:
         label = label[: max(0, inner_width - 1)] + "…"
@@ -460,17 +486,36 @@ def _frame_line(left: str, label: str, right: str) -> str:
 
 
 def _prompt_message() -> HTML:
-    return HTML('<prompt.border>│</prompt.border> <prompt.user>You</prompt.user> <prompt.symbol>›</prompt.symbol> ')
+    top = escape(_frame_line("╭", " Input ", "╮"))
+    return HTML(
+        f"<prompt.frame>{top}</prompt.frame>\n"
+        "<prompt.frame>│</prompt.frame> <prompt.user>You</prompt.user> <prompt.symbol>›</prompt.symbol> "
+    )
 
 
 def _prompt_style() -> Style:
     return Style.from_dict(
         {
+            "prompt.frame": "ansiyellow bold",
+            "prompt.status": "ansiyellow",
             "prompt.user": "ansigreen bold",
-            "prompt.symbol": "ansicyan bold",
-            "prompt.border": "ansicyan",
+            "prompt.symbol": "ansiwhite bold",
         }
     )
+
+
+def _input_status(user_id: str, chat_id: str, debug: bool) -> str:
+    return (
+        f"user={user_id}  chat={chat_id}  model={_model_label()}  "
+        f"knowledge=shared  memory=user  debug={'on' if debug else 'off'}"
+    )
+
+
+def _panel_width(preferred: int = 96) -> int:
+    terminal_width = console.width or preferred
+    if terminal_width <= 40:
+        return max(24, terminal_width - 2)
+    return min(preferred, terminal_width - 4)
 
 
 def _model_label() -> str:
