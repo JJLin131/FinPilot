@@ -7,13 +7,12 @@ WORKDIR /app
 
 COPY pyproject.toml README.md ./
 COPY FinanceAgent ./FinanceAgent
-COPY evals ./evals
 COPY observability ./observability
-COPY scripts ./scripts
 COPY src/main/resources ./src/main/resources
 
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir ".[eval]"
+    && pip install --no-cache-dir ".[eval]" \
+    && mkdir -p /app/data /app/evals/datasets
 
 EXPOSE 8099
 

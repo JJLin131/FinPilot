@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-harness"
+version = "0.1.0"
+description = "FastAPI finance agent service with LangGraph routing, RAG, memory, audit, and observability."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.34,<1",
+    "pydantic>=2.10,<3",
+    "pydantic-settings>=2.7,<3",
+    "langgraph>=0.2.60,<1",
+    "httpx>=0.28,<1",
+    "pymysql>=1.1,<2",
+    "opentelemetry-api>=1.29,<2",
+    "opentelemetry-sdk>=1.29,<2",
+    "opentelemetry-exporter-otlp-proto-http>=1.29,<2",
+]
+
+[project.optional-dependencies]
+eval = [
+    "langfuse>=2,<4",
+    "ragas>=0.2,<1",
+]
+dev = [
+    "pytest>=8,<9",
+    "ruff>=0.8,<1",
+    "langfuse>=2,<4",
+    "ragas>=0.2,<1",
+]
+
+[tool.setuptools.packages.find]
+include = ["FinanceAgent*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
