@@ -10,7 +10,7 @@ from FinanceAgent.rag.models import KnowledgeDocumentRequest, KnowledgeDocumentR
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="ecommerce-ai-agent-service-py", version="0.1.0")
+    app = FastAPI(title="agent-harness", version="0.1.0")
     service = FinanceAgentService()
     eval_runner = EvalRunner(service, service.audit_store)
     lifecycle_service = KnowledgeLifecycleService(service.rag_service)

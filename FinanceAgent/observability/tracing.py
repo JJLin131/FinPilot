@@ -14,7 +14,7 @@ from FinanceAgent.config import settings
 
 logger = logging.getLogger(__name__)
 
-_TRACER_NAME = "ecommerce-ai-agent-service-py"
+_TRACER_NAME = "agent-harness"
 _INITIALIZED = False
 
 
@@ -26,7 +26,7 @@ def setup_tracing() -> None:
     provider = TracerProvider(
         resource=Resource.create(
             {
-                "service.name": "ecommerce-ai-agent-service-py",
+                "service.name": "agent-harness",
                 "service.version": "0.1.0",
                 "deployment.environment": settings.app_env,
             }
