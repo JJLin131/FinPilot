@@ -91,15 +91,11 @@ def test_chat_handles_slash_commands_and_message(monkeypatch, tmp_path):
     fake = FakeService()
     prompts = iter(["/debug on", "hello", "/new chat-2", "/exit"])
 
-    class FakePromptSession:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def prompt(self, prompt: str, **kwargs) -> str:
-            return next(prompts)
+    def fake_prompt(*args, **kwargs) -> str:
+        return next(prompts)
 
     monkeypatch.setattr(cli, "service_factory", lambda: fake)
-    monkeypatch.setattr(cli, "PromptSession", FakePromptSession)
+    monkeypatch.setattr(cli, "_prompt_user_input", fake_prompt)
     monkeypatch.setattr(cli, "_history_path", lambda: tmp_path / "history")
 
     result = runner.invoke(cli.app, ["chat", "--user-id", "user-1", "--chat-id", "chat-1"])

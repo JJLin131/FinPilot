@@ -7,18 +7,21 @@ import io
 import uuid
 import warnings
 from collections.abc import Callable
-from html import escape
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx
 import typer
-from prompt_toolkit import PromptSession
+from prompt_toolkit.application import Application
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout import HSplit, Layout, Window
+from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.shortcuts import clear as clear_terminal
 from prompt_toolkit.styles import Style
+from prompt_toolkit.widgets import Frame, TextArea
 from rich import box
 from rich.align import Align
 from rich.console import Console, Group
@@ -119,17 +122,13 @@ def chat_command(
     resolved_user_id = user_id or settings.finpilot_default_user_id
     current_chat_id = chat_id or _new_chat_id()
     debug_enabled = debug
-    session = PromptSession(
-        history=FileHistory(str(_history_path())),
-        style=_prompt_style(),
-        bottom_toolbar=lambda: _input_status_toolbar(resolved_user_id, current_chat_id, debug_enabled),
-    )
+    history = FileHistory(str(_history_path()))
 
     _render_splash(resolved_user_id, current_chat_id, debug_enabled)
     _render_help()
     while True:
         try:
-            raw = session.prompt(_prompt_message(), rprompt=_prompt_right_border()).strip()
+            raw = _prompt_user_input(history, resolved_user_id, current_chat_id, debug_enabled).strip()
         except (EOFError, KeyboardInterrupt):
             console.print()
             break
@@ -504,40 +503,74 @@ def _new_chat_id() -> str:
     return f"cli-{uuid.uuid4().hex[:12]}"
 
 
-def _input_status_toolbar(user_id: str, chat_id: str, debug: bool) -> HTML:
-    width = _input_frame_width()
-    lines = [_frame_line("╰", "", "╯", width=width), *_status_toolbar_lines(user_id, chat_id, debug)]
-    return HTML(f"<prompt.status>{escape('\n'.join(lines))}</prompt.status>")
+def _prompt_user_input(history: FileHistory, user_id: str, chat_id: str, debug: bool) -> str:
+    app_ref: dict[str, Application[str]] = {}
 
+    def accept(buffer) -> bool:
+        app_ref["app"].exit(result=buffer.text)
+        return True
 
-def _frame_line(left: str, label: str, right: str, *, width: int | None = None) -> str:
-    width = width or _panel_width()
-    inner_width = width - 2
-    label = f" {label.strip()} " if label.strip() else ""
-    if len(label) > inner_width:
-        label = label[: max(0, inner_width - 1)] + "…"
-    return left + label + ("─" * max(0, inner_width - len(label))) + right
-
-
-def _prompt_message() -> HTML:
-    top = escape(_frame_line("╭", "Input", "╮", width=_input_frame_width()))
-    return HTML(
-        f"<prompt.frame>{top}</prompt.frame>\n"
-        "<prompt.frame>│</prompt.frame> <prompt.user>You</prompt.user> <prompt.symbol>›</prompt.symbol> "
+    input_area = TextArea(
+        multiline=False,
+        accept_handler=accept,
+        history=history,
+        wrap_lines=False,
+        prompt=HTML("<input.user>You</input.user> <input.symbol>›</input.symbol> "),
+        style="class:input.text",
+        height=1,
     )
+    status_lines = _status_toolbar_lines(user_id, chat_id, debug)
+    status = Window(
+        FormattedTextControl("\n".join(status_lines)),
+        height=max(1, len(status_lines)),
+        dont_extend_height=True,
+        style="class:input.status",
+    )
+    container = HSplit(
+        [
+            Frame(
+                input_area,
+                title=HTML("<input.title>Input</input.title>"),
+                style="class:input.frame",
+                width=_input_frame_width(),
+            ),
+            status,
+        ],
+        width=_input_frame_width(),
+    )
+    bindings = KeyBindings()
 
+    @bindings.add("c-c")
+    def _cancel(event) -> None:
+        event.app.exit(exception=KeyboardInterrupt())
 
-def _prompt_right_border() -> HTML:
-    return HTML("<prompt.frame>│</prompt.frame>")
+    @bindings.add("c-d")
+    def _eof(event) -> None:
+        event.app.exit(exception=EOFError())
+
+    application: Application[str] = Application(
+        layout=Layout(container, focused_element=input_area),
+        key_bindings=bindings,
+        style=_prompt_style(),
+        full_screen=False,
+        erase_when_done=True,
+    )
+    app_ref["app"] = application
+    return application.run()
 
 
 def _prompt_style() -> Style:
     return Style.from_dict(
         {
-            "prompt.frame": "ansiyellow bold",
-            "prompt.status": "ansiyellow",
-            "prompt.user": "ansigreen bold",
-            "prompt.symbol": "ansiwhite bold",
+            "frame.border": "ansiyellow bold",
+            "frame.label": "ansiyellow bold",
+            "input.frame": "ansiyellow",
+            "input.status": "ansiyellow",
+            "input.text": "ansiwhite",
+            "input.title": "ansiyellow bold",
+            "input.user": "ansigreen bold",
+            "input.symbol": "ansiwhite bold",
+            "text-area.prompt": "ansigreen bold",
         }
     )
 
