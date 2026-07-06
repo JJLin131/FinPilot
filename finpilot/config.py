@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     title_conflict_min_score: float = 0.82
     title_conflict_search_limit: int = 8
     context_policies: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    model_context_windows: dict[str, int] = Field(default_factory=dict)
 
     rag_curation_enabled: bool = True
     rag_curation_provider: str = "deepseek"

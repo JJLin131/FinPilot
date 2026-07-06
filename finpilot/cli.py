@@ -31,7 +31,9 @@ from rich.table import Table
 from rich.text import Text
 
 from finpilot.config import settings
+from finpilot.context.compression import DEFAULT_CONTEXT_POLICIES, estimate_tokens
 from finpilot.memory.models import ChatSessionSummary, ChatTurn
+from finpilot.memory.service import MAX_STORED_MESSAGES, RECENT_MESSAGE_LIMIT
 from finpilot.memory.stores import AgentChatMemoryStore
 from finpilot.models import AgentChatResponse
 from finpilot.mysql import connect_runtime_mysql
@@ -270,8 +272,8 @@ def _handle_slash_command(raw: str, user_id: str, chat_id: str, debug: bool) -> 
         else:
             debug = not debug
         _render_system_notice("Debug", "on" if debug else "off")
-    elif command == "/context":
-        _render_context(user_id, chat_id, debug)
+    elif command in {"/status", "/context"}:
+        _render_status(user_id, chat_id, debug)
     elif command == "/clear":
         clear_terminal()
     else:
@@ -352,28 +354,113 @@ def _render_splash(user_id: str, chat_id: str, debug: bool) -> None:
     )
 
 
-def _render_context(user_id: str, chat_id: str, debug: bool) -> None:
-    table = Table(
-        title="Runtime context",
-        box=box.ROUNDED,
-        border_style=BRAND_BORDER,
-        width=_panel_width(92),
-        row_styles=["", "dim"],
+def _render_status(user_id: str, chat_id: str, debug: bool) -> None:
+    snapshot = _build_status_snapshot(user_id, chat_id, debug)
+    body = Group(
+        _status_session_table(snapshot),
+        _status_context_table(snapshot),
+        _status_models_table(snapshot),
     )
-    table.add_column("Setting", style="bright_yellow")
-    table.add_column("Value", style="white")
-    for label, value in _session_status_items(user_id, chat_id, debug):
-        table.add_row(label, value)
     console.print(
         Panel(
-            table,
-            title="[bold bright_yellow]Session[/]",
+            body,
+            title="[bold bright_yellow]Status[/]",
+            subtitle="[dim]/context alias supported[/]",
             border_style=BRAND_BORDER,
             box=box.ROUNDED,
-            width=_panel_width(96),
+            width=_panel_width(100),
             expand=False,
         )
     )
+
+
+def _build_status_snapshot(user_id: str, chat_id: str, debug: bool) -> dict[str, object]:
+    messages, load_error = _load_messages_for_status(user_id, chat_id)
+    estimated_tokens = estimate_tokens([message.model_dump(mode="json") for message in messages]) if messages else 0
+    policy = DEFAULT_CONTEXT_POLICIES["agent_default"]
+    model_window = _model_context_window_tokens(_model_label())
+    return {
+        "user_id": user_id,
+        "chat_id": chat_id,
+        "memory_id": _memory_id(user_id, chat_id),
+        "debug": "on" if debug else "off",
+        "messages": messages,
+        "message_count": len(messages),
+        "visible_message_count": min(len(messages), RECENT_MESSAGE_LIMIT),
+        "max_stored_messages": MAX_STORED_MESSAGES,
+        "load_error": load_error,
+        "estimated_tokens": estimated_tokens,
+        "model_context_window": model_window,
+        "model_context_percent": (estimated_tokens / model_window) if model_window else None,
+        "agent_policy": "agent_default",
+        "agent_budget": policy.token_budget,
+        "agent_trigger": int(policy.token_budget * policy.trigger_ratio),
+        "token_counter": "heuristic",
+        "models": dict(_session_status_items(user_id, chat_id, debug)),
+    }
+
+
+def _status_session_table(snapshot: dict[str, object]) -> Table:
+    table = Table(title="Session", box=box.SIMPLE_HEAVY, border_style=INFO_BORDER, width=_panel_width(92), row_styles=["", "dim"])
+    table.add_column("Field", style="bright_cyan")
+    table.add_column("Value", style="white")
+    table.add_row("user", str(snapshot["user_id"]))
+    table.add_row("chat", str(snapshot["chat_id"]))
+    table.add_row("memory", str(snapshot["memory_id"]))
+    table.add_row("debug", str(snapshot["debug"]))
+    return table
+
+
+def _status_context_table(snapshot: dict[str, object]) -> Table:
+    estimated_tokens = int(snapshot["estimated_tokens"])
+    model_window = snapshot["model_context_window"]
+    load_error = snapshot["load_error"]
+    table = Table(title="Context", box=box.SIMPLE_HEAVY, border_style=BRAND_BORDER, width=_panel_width(92), row_styles=["", "dim"])
+    table.add_column("Metric", style="bright_yellow")
+    table.add_column("Value", style="white")
+    table.add_row("estimated stored", _format_tokens(estimated_tokens))
+    if isinstance(model_window, int):
+        table.add_row("model window", f"{_format_tokens(estimated_tokens)} / {_format_tokens(model_window)}")
+        table.add_row("model usage", f"{_usage_bar(estimated_tokens, model_window)} {_format_percent(estimated_tokens / model_window)}")
+    else:
+        table.add_row("model window", "not configured")
+    table.add_row("stored messages", f"{snapshot['message_count']} / {snapshot['max_stored_messages']}")
+    table.add_row("visible recent", f"{snapshot['visible_message_count']} / {RECENT_MESSAGE_LIMIT}")
+    table.add_row("agent policy", str(snapshot["agent_policy"]))
+    table.add_row(
+        "agent prompt",
+        f"{_format_tokens(estimated_tokens)} / {_format_tokens(int(snapshot['agent_budget']))}",
+    )
+    table.add_row(
+        "agent trigger",
+        f"{_usage_bar(estimated_tokens, int(snapshot['agent_trigger']))} {_format_tokens(int(snapshot['agent_trigger']))}",
+    )
+    table.add_row("token counter", str(snapshot["token_counter"]))
+    if load_error:
+        table.add_row("history load", f"[yellow]{load_error}[/]")
+    return table
+
+
+def _status_models_table(snapshot: dict[str, object]) -> Table:
+    models = snapshot["models"]
+    assert isinstance(models, dict)
+    table = Table(title="Models & Retrieval", box=box.SIMPLE_HEAVY, border_style=INFO_BORDER, width=_panel_width(92), row_styles=["", "dim"])
+    table.add_column("Component", style="bright_cyan")
+    table.add_column("Value", style="white")
+    table.add_row("query", str(models["queryModel"]))
+    table.add_row("route", str(models["routeModel"]))
+    table.add_row("embedding", str(models["embeddingModel"]))
+    table.add_row("rewrite", str(models["rewriteModel"]))
+    table.add_row("curation", str(models["curationModel"]))
+    table.add_row("reranker", str(models["reranker"]))
+    return table
+
+
+def _load_messages_for_status(user_id: str, chat_id: str) -> tuple[list[ChatTurn], str | None]:
+    try:
+        return _load_chat_messages(user_id, chat_id), None
+    except Exception as exc:
+        return [], str(exc)
 
 
 def _render_system_notice(title: str, message: str) -> None:
@@ -494,7 +581,8 @@ def _render_help() -> None:
     table.add_row("/sessions [limit]", "List recent conversations")
     table.add_row("/history [limit]", "Show current conversation memory")
     table.add_row("/debug on|off", "Toggle debug output")
-    table.add_row("/context", "Show current chat settings")
+    table.add_row("/status", "Show context, model, and session status")
+    table.add_row("/context", "Alias for /status")
     table.add_row("/clear", "Clear terminal")
     table.add_row("/exit", "Leave chat")
     console.print(
@@ -784,6 +872,37 @@ def _enabled_provider_model(enabled: bool, provider: str, model_name: str) -> st
 
 def _enabled_value(enabled: bool, value: str) -> str:
     return value if enabled else f"off:{value}"
+
+
+def _model_context_window_tokens(model_label: str) -> int | None:
+    windows = settings.model_context_windows or {}
+    model_name = model_label.split(":", 1)[-1]
+    value = windows.get(model_label) or windows.get(model_name)
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _format_tokens(value: int) -> str:
+    if value >= 1000:
+        rounded = value / 1000
+        return f"{rounded:.1f}k" if value % 1000 else f"{value // 1000}k"
+    return str(value)
+
+
+def _format_percent(value: float) -> str:
+    return f"{value * 100:.1f}%"
+
+
+def _usage_bar(used: int, total: int, width: int = 18) -> str:
+    if total <= 0:
+        return "[" + ("-" * width) + "]"
+    filled = max(0, min(width, round((used / total) * width)))
+    return "[" + ("█" * filled) + ("░" * (width - filled)) + "]"
 
 
 def _panel_width(preferred: int = 96) -> int:

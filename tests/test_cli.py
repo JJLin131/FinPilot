@@ -151,6 +151,42 @@ def test_chat_can_list_history_and_resume(monkeypatch, tmp_path):
     assert "Resume" in result.output
 
 
+def test_chat_status_shows_context_budget_without_guessing_model_window(monkeypatch, tmp_path):
+    fake = FakeService()
+    prompts = iter(["/status", "/context", "/exit"])
+
+    def fake_prompt(*args, **kwargs) -> str:
+        return next(prompts)
+
+    monkeypatch.setattr(cli, "service_factory", lambda: fake)
+    monkeypatch.setattr(cli, "_prompt_user_input", fake_prompt)
+    monkeypatch.setattr(cli, "_history_path", lambda: tmp_path / "history")
+    monkeypatch.setattr(
+        cli,
+        "_load_chat_messages",
+        lambda user_id, chat_id: [
+            ChatTurn(role="user", content="hello"),
+            ChatTurn(role="assistant", content="answer"),
+        ],
+    )
+    monkeypatch.setattr(cli.settings, "model_context_windows", {})
+
+    result = runner.invoke(cli.app, ["chat", "--user-id", "user-1", "--chat-id", "chat-1"])
+
+    assert result.exit_code == 0
+    assert "Status" in result.output
+    assert "Context" in result.output
+    assert "model window" in result.output
+    assert "not configured" in result.output
+    assert "agent prompt" in result.output
+
+
+def test_model_context_window_uses_configured_model_value(monkeypatch):
+    monkeypatch.setattr(cli.settings, "model_context_windows", {"deepseek-v4-pro": 96000})
+
+    assert cli._model_context_window_tokens("deepseek:deepseek-v4-pro") == 96000
+
+
 def test_chat_list_sessions_exits_without_prompt(monkeypatch):
     monkeypatch.setattr(
         cli,
