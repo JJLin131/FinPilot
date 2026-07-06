@@ -177,7 +177,7 @@ def chat_command(
 
 @app.command()
 def doctor() -> None:
-    table = Table(title="FinPilot doctor", box=box.ROUNDED, border_style=INFO_BORDER, row_styles=["", "dim"])
+    table = Table(title="FinPilot doctor", box=box.ROUNDED, border_style=INFO_BORDER)
     table.add_column("Check", style="bright_cyan")
     table.add_column("Status")
     table.add_column("Details")
@@ -221,7 +221,7 @@ def bootstrap_knowledge() -> None:
         if service is not None:
             service.shutdown()
 
-    table = Table(title="Knowledge bootstrap", box=box.ROUNDED, border_style=INFO_BORDER, row_styles=["", "dim"])
+    table = Table(title="Knowledge bootstrap", box=box.ROUNDED, border_style=INFO_BORDER)
     table.add_column("Document", style="bright_cyan")
     table.add_column("Domain", style="bright_yellow")
     table.add_column("Status")
@@ -395,13 +395,14 @@ def _build_status_snapshot(user_id: str, chat_id: str, debug: bool) -> dict[str,
         "agent_policy": "agent_default",
         "agent_budget": policy.token_budget,
         "agent_trigger": int(policy.token_budget * policy.trigger_ratio),
+        "agent_trigger_ratio": policy.trigger_ratio,
         "token_counter": "heuristic",
         "models": dict(_session_status_items(user_id, chat_id, debug)),
     }
 
 
 def _status_session_table(snapshot: dict[str, object]) -> Table:
-    table = Table(title="Session", box=box.SIMPLE_HEAVY, border_style=INFO_BORDER, width=_panel_width(92), row_styles=["", "dim"])
+    table = Table(title="Session", box=box.SIMPLE_HEAVY, border_style=INFO_BORDER, width=_panel_width(92))
     table.add_column("Field", style="bright_cyan")
     table.add_column("Value", style="white")
     table.add_row("user", str(snapshot["user_id"]))
@@ -415,13 +416,13 @@ def _status_context_table(snapshot: dict[str, object]) -> Table:
     estimated_tokens = int(snapshot["estimated_tokens"])
     model_window = snapshot["model_context_window"]
     load_error = snapshot["load_error"]
-    table = Table(title="Context", box=box.SIMPLE_HEAVY, border_style=BRAND_BORDER, width=_panel_width(92), row_styles=["", "dim"])
+    table = Table(title="Context", box=box.SIMPLE_HEAVY, border_style=BRAND_BORDER, width=_panel_width(92))
     table.add_column("Metric", style="bright_yellow")
     table.add_column("Value", style="white")
     table.add_row("estimated stored", _format_tokens(estimated_tokens))
     if isinstance(model_window, int):
         table.add_row("model window", f"{_format_tokens(estimated_tokens)} / {_format_tokens(model_window)}")
-        table.add_row("model usage", f"{_usage_bar(estimated_tokens, model_window)} {_format_percent(estimated_tokens / model_window)}")
+        table.add_row("model usage", _format_percent(estimated_tokens / model_window))
     else:
         table.add_row("model window", "not configured")
     table.add_row("stored messages", f"{snapshot['message_count']} / {snapshot['max_stored_messages']}")
@@ -433,7 +434,7 @@ def _status_context_table(snapshot: dict[str, object]) -> Table:
     )
     table.add_row(
         "agent trigger",
-        f"{_usage_bar(estimated_tokens, int(snapshot['agent_trigger']))} {_format_tokens(int(snapshot['agent_trigger']))}",
+        f"{_format_tokens(int(snapshot['agent_trigger']))} ({_format_percent(float(snapshot['agent_trigger_ratio']))} of agent budget)",
     )
     table.add_row("token counter", str(snapshot["token_counter"]))
     if load_error:
@@ -444,7 +445,7 @@ def _status_context_table(snapshot: dict[str, object]) -> Table:
 def _status_models_table(snapshot: dict[str, object]) -> Table:
     models = snapshot["models"]
     assert isinstance(models, dict)
-    table = Table(title="Models & Retrieval", box=box.SIMPLE_HEAVY, border_style=INFO_BORDER, width=_panel_width(92), row_styles=["", "dim"])
+    table = Table(title="Models & Retrieval", box=box.SIMPLE_HEAVY, border_style=INFO_BORDER, width=_panel_width(92))
     table.add_column("Component", style="bright_cyan")
     table.add_column("Value", style="white")
     table.add_row("query", str(models["queryModel"]))
@@ -506,7 +507,7 @@ def _render_response(response: AgentChatResponse, *, debug: bool) -> None:
     if response.issues:
         _render_issues(response, debug=debug)
     if response.evidence:
-        table = Table(title="Evidence", box=box.ROUNDED, border_style=INFO_BORDER, width=_panel_width(), row_styles=["", "dim"])
+        table = Table(title="Evidence", box=box.ROUNDED, border_style=INFO_BORDER, width=_panel_width())
         table.add_column("Tool", style="bright_cyan")
         table.add_column("Source", style="bright_green")
         table.add_column("Summary", style="white")
@@ -519,7 +520,7 @@ def _render_response(response: AgentChatResponse, *, debug: bool) -> None:
 
 
 def _render_issues(response: AgentChatResponse, *, debug: bool) -> None:
-    table = Table(title="Issues", box=box.ROUNDED, border_style=BRAND_BORDER, width=_panel_width(), row_styles=["", "dim"])
+    table = Table(title="Issues", box=box.ROUNDED, border_style=BRAND_BORDER, width=_panel_width())
     table.add_column("Code", style="bright_yellow")
     table.add_column("Component", style="bright_cyan")
     table.add_column("Severity", style="white")
@@ -536,7 +537,7 @@ def _render_issues(response: AgentChatResponse, *, debug: bool) -> None:
 
 def _render_debug(response: AgentChatResponse) -> None:
     route = response.route
-    route_table = Table(title="Route", box=box.ROUNDED, border_style=DEBUG_BORDER, width=_panel_width(), row_styles=["", "dim"])
+    route_table = Table(title="Route", box=box.ROUNDED, border_style=DEBUG_BORDER, width=_panel_width())
     route_table.add_column("Intent", style="bright_cyan")
     route_table.add_column("Target", style="bright_green")
     route_table.add_column("Confidence", style="bright_yellow")
@@ -544,7 +545,7 @@ def _render_debug(response: AgentChatResponse) -> None:
     route_table.add_row(route.normalized_intent, route.target_agent, f"{route.confidence:.2f}", route.fallback_cause)
     console.print(route_table)
     if response.tool_calls:
-        tool_table = Table(title="Tool calls", box=box.ROUNDED, border_style=DEBUG_BORDER, width=_panel_width(), row_styles=["", "dim"])
+        tool_table = Table(title="Tool calls", box=box.ROUNDED, border_style=DEBUG_BORDER, width=_panel_width())
         tool_table.add_column("Step", style="dim")
         tool_table.add_column("Tool", style="bright_cyan")
         tool_table.add_column("Status", style="bright_green")
@@ -571,7 +572,6 @@ def _render_help() -> None:
         box=box.SIMPLE_HEAVY,
         border_style=INFO_BORDER,
         width=_panel_width(76) - 4,
-        row_styles=["", "dim"],
     )
     table.add_column("Command", style="bright_cyan")
     table.add_column("Action", style="white")
@@ -606,7 +606,7 @@ def _render_sessions(user_id: str, limit: int = 10) -> None:
     if not sessions:
         _render_system_notice("Sessions", f"No stored conversations for user={user_id}.")
         return
-    table = Table(title="Recent conversations", box=box.ROUNDED, border_style=INFO_BORDER, width=_panel_width(), row_styles=["", "dim"])
+    table = Table(title="Recent conversations", box=box.ROUNDED, border_style=INFO_BORDER, width=_panel_width())
     table.add_column("Chat", style="bright_cyan")
     table.add_column("Turns", justify="right", style="bright_yellow")
     table.add_column("Updated", style="white")
@@ -642,7 +642,7 @@ def _render_chat_history(user_id: str, chat_id: str, limit: int = 12) -> None:
     if not messages:
         _render_system_notice("History", f"No stored messages for chat_id={chat_id}.")
         return
-    table = Table(title=f"History: {chat_id}", box=box.ROUNDED, border_style=INFO_BORDER, width=_panel_width(), row_styles=["", "dim"])
+    table = Table(title=f"History: {chat_id}", box=box.ROUNDED, border_style=INFO_BORDER, width=_panel_width())
     table.add_column("Role", style="bright_cyan")
     table.add_column("Message", style="white")
     for message in messages[-limit:]:
@@ -896,13 +896,6 @@ def _format_tokens(value: int) -> str:
 
 def _format_percent(value: float) -> str:
     return f"{value * 100:.1f}%"
-
-
-def _usage_bar(used: int, total: int, width: int = 18) -> str:
-    if total <= 0:
-        return "[" + ("-" * width) + "]"
-    filled = max(0, min(width, round((used / total) * width)))
-    return "[" + ("█" * filled) + ("░" * (width - filled)) + "]"
 
 
 def _panel_width(preferred: int = 96) -> int:

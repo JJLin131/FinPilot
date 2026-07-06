@@ -179,6 +179,9 @@ def test_chat_status_shows_context_budget_without_guessing_model_window(monkeypa
     assert "model window" in result.output
     assert "not configured" in result.output
     assert "agent prompt" in result.output
+    assert "agent trigger" in result.output
+    assert "░" not in result.output
+    assert "█" not in result.output
 
 
 def test_model_context_window_uses_configured_model_value(monkeypatch):
