@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -58,6 +59,7 @@ class Settings(BaseSettings):
     title_conflict_enabled: bool = True
     title_conflict_min_score: float = 0.82
     title_conflict_search_limit: int = 8
+    context_policies: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     rag_curation_enabled: bool = True
     rag_curation_provider: str = "deepseek"

@@ -5,7 +5,7 @@ import logging
 
 from finpilot.context.builders import (
     build_answer_prompt_context,
-    build_loop_prompt_context,
+    build_loop_prompt_bundle,
     build_session_context,
     init_loop_context,
 )
@@ -85,9 +85,11 @@ class AgentRuntime:
         if state.evidence:
             return AgentDecision(decision="answer", reason="Evidence is available.", enough_information=True)
 
-        prompt_context = build_loop_prompt_context(session_context, subagent_context, loop_context)
+        prompt_bundle = build_loop_prompt_bundle(session_context, subagent_context, loop_context)
+        state.context_usage["decision"] = prompt_bundle.usage
+        state.context_compactions.extend(prompt_bundle.compression_events)
         try:
-            decision = self.decision_service.decide(build_agent_decision_prompt(prompt_context))
+            decision = self.decision_service.decide(build_agent_decision_prompt(prompt_bundle.payload))
         except Exception as exc:
             logger.warning("Agent decision LLM failed; using deterministic fallback: %s", exc)
             return self._fallback_decision(loop_context, state)

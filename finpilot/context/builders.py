@@ -3,7 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from finpilot.agent.tools import ToolRegistry
+from finpilot.context.compression import ContextBuilder, ContextSegment, PromptContextBundle
 from finpilot.models import GraphState, LoopContext, SessionContext, SubAgentContext
+
+
+_context_builder = ContextBuilder()
 
 
 def build_session_context(state: GraphState) -> SessionContext:
@@ -22,24 +26,6 @@ def build_session_context(state: GraphState) -> SessionContext:
 
 
 def build_subagent_context(state: GraphState, agent_name: str, tools: ToolRegistry) -> SubAgentContext:
-    if agent_name == "QueryAgent":
-        return SubAgentContext(
-            agent_name=agent_name,
-            role="You are a finance knowledge QA sub-agent.",
-            goal="Answer the user's current finance question using retrieved knowledge evidence.",
-            constraints=[
-                "Do not invent finance rules.",
-                "Use retrieved evidence when it is available.",
-                "If evidence is insufficient, say that the knowledge base does not contain enough information.",
-                "Do not perform route decisions, audit persistence, or system governance work.",
-            ],
-            success_criteria=[
-                "A supported answer can be produced from evidence.",
-                "Or the available evidence is insufficient and the agent stops clearly.",
-            ],
-            allowed_tools=tools.list_allowed(["search_finance_knowledge"]),
-            max_steps=3,
-        )
     return SubAgentContext(
         agent_name=agent_name,
         role=f"You are the {agent_name} sub-agent.",
@@ -67,11 +53,22 @@ def build_loop_prompt_context(
     subagent_context: SubAgentContext,
     loop_context: LoopContext,
 ) -> dict[str, Any]:
-    return {
-        "session": session_context.model_dump(mode="json"),
-        "sub_agent": subagent_context.model_dump(mode="json"),
-        "loop": loop_context.model_dump(mode="json"),
-    }
+    return build_loop_prompt_bundle(session_context, subagent_context, loop_context).payload
+
+
+def build_loop_prompt_bundle(
+    session_context: SessionContext,
+    subagent_context: SubAgentContext,
+    loop_context: LoopContext,
+) -> PromptContextBundle:
+    return _context_builder.build(
+        subagent_context.context_policy,
+        [
+            ContextSegment(name="session", value=session_context, priority=10),
+            ContextSegment(name="sub_agent", value=subagent_context, priority=20),
+            ContextSegment(name="loop", value=loop_context, priority=30),
+        ],
+    )
 
 
 def build_answer_prompt_context(

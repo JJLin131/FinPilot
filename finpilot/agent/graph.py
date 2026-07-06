@@ -7,8 +7,8 @@ from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 
+from finpilot.agent.agents import FinanceQaSubAgent, TransferSubAgent
 from finpilot.agent.router import IntentRouter
-from finpilot.agent.subagents import QuerySubAgent, TransferSubAgent
 from finpilot.agent.tools import ToolRegistry
 from finpilot.intents import UNKNOWN_INTENT_ANSWER
 from finpilot.issues import issue_from_tool_failure
@@ -24,7 +24,7 @@ class FinPilotGraph:
         self.tools = tools
         self.audit_store = audit_store
         self.memory_manager = memory_manager
-        self.query_agent = QuerySubAgent()
+        self.query_agent = FinanceQaSubAgent()
         self.transfer_agent = TransferSubAgent()
         self.graph = self._build_graph()
 
@@ -70,6 +70,8 @@ class FinPilotGraph:
                     "loop_count": graph_state.loop_count,
                     "stop_reason": graph_state.stop_reason,
                     "evidence_sufficient": graph_state.evidence_sufficient,
+                    "context_usage": graph_state.context_usage,
+                    "context_compactions": graph_state.context_compactions,
                 },
                 retrieval_debug={
                     "retrieved_docs": [item.model_dump() for item in graph_state.retrieved_docs],

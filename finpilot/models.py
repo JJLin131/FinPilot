@@ -82,6 +82,7 @@ class SubAgentContext(BaseModel):
     success_criteria: list[str] = Field(default_factory=list)
     allowed_tools: list[ToolCard] = Field(default_factory=list)
     max_steps: int = 3
+    context_policy: str = "agent_default"
 
 
 class AgentDecision(BaseModel):
@@ -198,4 +199,6 @@ class GraphState(BaseModel):
     final_answer: str = ""
     latency_breakdown: dict[str, float] = Field(default_factory=dict)
     scores: dict[str, float] = Field(default_factory=dict)
+    context_usage: dict[str, Any] = Field(default_factory=dict)
+    context_compactions: list[dict[str, Any]] = Field(default_factory=list)
 
