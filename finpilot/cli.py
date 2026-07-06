@@ -52,9 +52,15 @@ logging.getLogger("opentelemetry").setLevel(logging.ERROR)
 BRAND = "FinPilot"
 AUTHOR = "JJLin131"
 PACKAGE_NAME = "finpilot"
-THINKING_TEXT = "[bold cyan]FinPilot is thinking[/] [dim]routing / retrieving / composing[/]"
+THINKING_TEXT = "[bold bright_cyan]FinPilot is thinking[/] [dim]routing -> retrieving -> composing[/]"
 ServiceFactory = Callable[[], "FinPilotService"]
 ChatStoreFactory = Callable[[], AgentChatMemoryStore]
+
+BRAND_BORDER = "bright_yellow"
+ASSISTANT_BORDER = "bright_cyan"
+USER_BORDER = "bright_green"
+INFO_BORDER = "bright_blue"
+DEBUG_BORDER = "magenta"
 
 console = Console()
 app = typer.Typer(
@@ -169,8 +175,8 @@ def chat_command(
 
 @app.command()
 def doctor() -> None:
-    table = Table(title="FinPilot doctor", box=box.ASCII)
-    table.add_column("Check", style="cyan")
+    table = Table(title="FinPilot doctor", box=box.ROUNDED, border_style=INFO_BORDER, row_styles=["", "dim"])
+    table.add_column("Check", style="bright_cyan")
     table.add_column("Status")
     table.add_column("Details")
 
@@ -213,9 +219,9 @@ def bootstrap_knowledge() -> None:
         if service is not None:
             service.shutdown()
 
-    table = Table(title="Knowledge bootstrap", box=box.ASCII)
-    table.add_column("Document")
-    table.add_column("Domain")
+    table = Table(title="Knowledge bootstrap", box=box.ROUNDED, border_style=INFO_BORDER, row_styles=["", "dim"])
+    table.add_column("Document", style="bright_cyan")
+    table.add_column("Domain", style="bright_yellow")
     table.add_column("Status")
     table.add_column("Chunks", justify="right")
     for result in results:
@@ -315,11 +321,11 @@ def _render_splash(user_id: str, chat_id: str, debug: bool) -> None:
                 "|_|    |_|_| |_|_|   |_|_|\\___/ \\__|",
             ]
         ),
-        style="bold cyan",
+        style="bold bright_cyan",
         justify="center",
     )
     grid = Table.grid(padding=(0, 2))
-    grid.add_column(style="bold cyan", justify="right")
+    grid.add_column(style="bold bright_yellow", justify="right")
     grid.add_column()
     grid.add_row("author", f"[white]{AUTHOR}[/]")
     grid.add_row("version", f"[white]{_app_version()}[/]")
@@ -337,7 +343,8 @@ def _render_splash(user_id: str, chat_id: str, debug: bool) -> None:
         Panel(
             body,
             title=f"[bold bright_yellow]{BRAND}[/]",
-            border_style="bright_yellow",
+            subtitle="[dim]finance copilot shell[/]",
+            border_style=BRAND_BORDER,
             box=box.ROUNDED,
             width=_panel_width(88),
             expand=False,
@@ -346,7 +353,13 @@ def _render_splash(user_id: str, chat_id: str, debug: bool) -> None:
 
 
 def _render_context(user_id: str, chat_id: str, debug: bool) -> None:
-    table = Table(title="Runtime context", box=box.ROUNDED, border_style="bright_yellow", width=_panel_width(92))
+    table = Table(
+        title="Runtime context",
+        box=box.ROUNDED,
+        border_style=BRAND_BORDER,
+        width=_panel_width(92),
+        row_styles=["", "dim"],
+    )
     table.add_column("Setting", style="bright_yellow")
     table.add_column("Value", style="white")
     for label, value in _session_status_items(user_id, chat_id, debug):
@@ -355,7 +368,7 @@ def _render_context(user_id: str, chat_id: str, debug: bool) -> None:
         Panel(
             table,
             title="[bold bright_yellow]Session[/]",
-            border_style="bright_yellow",
+            border_style=BRAND_BORDER,
             box=box.ROUNDED,
             width=_panel_width(96),
             expand=False,
@@ -368,7 +381,7 @@ def _render_system_notice(title: str, message: str) -> None:
         Panel(
             message,
             title=f"[bold bright_yellow]{title}[/]",
-            border_style="bright_yellow",
+            border_style=BRAND_BORDER,
             box=box.ROUNDED,
             width=_panel_width(84),
             expand=False,
@@ -382,7 +395,7 @@ def _render_user_message(content: str) -> None:
             Text(content, style="bright_green"),
             title="[bold bright_green]You[/]",
             title_align="left",
-            border_style="bright_green",
+            border_style=USER_BORDER,
             box=box.ROUNDED,
             width=_panel_width(),
             expand=False,
@@ -396,7 +409,7 @@ def _render_response(response: AgentChatResponse, *, debug: bool) -> None:
             Markdown(response.answer or "(empty answer)"),
             title=f"[bold bright_cyan]{BRAND}[/]",
             title_align="left",
-            border_style="bright_cyan",
+            border_style=ASSISTANT_BORDER,
             style="white",
             width=_panel_width(),
             expand=False,
@@ -406,9 +419,9 @@ def _render_response(response: AgentChatResponse, *, debug: bool) -> None:
     if response.issues:
         _render_issues(response, debug=debug)
     if response.evidence:
-        table = Table(title="Evidence", box=box.ROUNDED, border_style="bright_blue", width=_panel_width())
-        table.add_column("Tool", style="cyan")
-        table.add_column("Source", style="green")
+        table = Table(title="Evidence", box=box.ROUNDED, border_style=INFO_BORDER, width=_panel_width(), row_styles=["", "dim"])
+        table.add_column("Tool", style="bright_cyan")
+        table.add_column("Source", style="bright_green")
         table.add_column("Summary", style="white")
         for item in response.evidence:
             summary = item.summary.get("document_id") or item.summary.get("title") or json.dumps(item.summary, ensure_ascii=False)
@@ -419,9 +432,9 @@ def _render_response(response: AgentChatResponse, *, debug: bool) -> None:
 
 
 def _render_issues(response: AgentChatResponse, *, debug: bool) -> None:
-    table = Table(title="Issues", box=box.ROUNDED, border_style="yellow", width=_panel_width())
-    table.add_column("Code", style="yellow")
-    table.add_column("Component", style="cyan")
+    table = Table(title="Issues", box=box.ROUNDED, border_style=BRAND_BORDER, width=_panel_width(), row_styles=["", "dim"])
+    table.add_column("Code", style="bright_yellow")
+    table.add_column("Component", style="bright_cyan")
     table.add_column("Severity", style="white")
     table.add_column("Message", style="white")
     if debug:
@@ -436,19 +449,19 @@ def _render_issues(response: AgentChatResponse, *, debug: bool) -> None:
 
 def _render_debug(response: AgentChatResponse) -> None:
     route = response.route
-    route_table = Table(title="Route", box=box.ROUNDED, border_style="magenta", width=_panel_width())
-    route_table.add_column("Intent", style="cyan")
-    route_table.add_column("Target", style="green")
-    route_table.add_column("Confidence", style="yellow")
+    route_table = Table(title="Route", box=box.ROUNDED, border_style=DEBUG_BORDER, width=_panel_width(), row_styles=["", "dim"])
+    route_table.add_column("Intent", style="bright_cyan")
+    route_table.add_column("Target", style="bright_green")
+    route_table.add_column("Confidence", style="bright_yellow")
     route_table.add_column("Fallback", style="white")
     route_table.add_row(route.normalized_intent, route.target_agent, f"{route.confidence:.2f}", route.fallback_cause)
     console.print(route_table)
     if response.tool_calls:
-        tool_table = Table(title="Tool calls", box=box.ROUNDED, border_style="magenta", width=_panel_width())
+        tool_table = Table(title="Tool calls", box=box.ROUNDED, border_style=DEBUG_BORDER, width=_panel_width(), row_styles=["", "dim"])
         tool_table.add_column("Step", style="dim")
-        tool_table.add_column("Tool", style="cyan")
-        tool_table.add_column("Status", style="green")
-        tool_table.add_column("Duration", style="yellow")
+        tool_table.add_column("Tool", style="bright_cyan")
+        tool_table.add_column("Status", style="bright_green")
+        tool_table.add_column("Duration", style="bright_yellow")
         tool_table.add_column("Summary")
         for tool in response.tool_calls:
             tool_table.add_row(
@@ -466,8 +479,14 @@ def _render_debug(response: AgentChatResponse) -> None:
 
 
 def _render_help() -> None:
-    table = Table(title="Slash commands", box=box.ROUNDED, border_style="bright_blue", width=_panel_width(76) - 4)
-    table.add_column("Command", style="cyan")
+    table = Table(
+        title="Slash commands",
+        box=box.SIMPLE_HEAVY,
+        border_style=INFO_BORDER,
+        width=_panel_width(76) - 4,
+        row_styles=["", "dim"],
+    )
+    table.add_column("Command", style="bright_cyan")
     table.add_column("Action", style="white")
     table.add_row("/help", "Show commands")
     table.add_row("/new [chat-id]", "Start a new conversation")
@@ -482,7 +501,7 @@ def _render_help() -> None:
         Panel(
             Group(table),
             title="[bold bright_blue]Help[/]",
-            border_style="bright_blue",
+            border_style=INFO_BORDER,
             box=box.ROUNDED,
             width=_panel_width(76),
             expand=False,
@@ -499,9 +518,9 @@ def _render_sessions(user_id: str, limit: int = 10) -> None:
     if not sessions:
         _render_system_notice("Sessions", f"No stored conversations for user={user_id}.")
         return
-    table = Table(title="Recent conversations", box=box.ROUNDED, border_style="bright_yellow", width=_panel_width())
-    table.add_column("Chat", style="cyan")
-    table.add_column("Turns", justify="right", style="yellow")
+    table = Table(title="Recent conversations", box=box.ROUNDED, border_style=INFO_BORDER, width=_panel_width(), row_styles=["", "dim"])
+    table.add_column("Chat", style="bright_cyan")
+    table.add_column("Turns", justify="right", style="bright_yellow")
     table.add_column("Updated", style="white")
     table.add_column("Last user message", style="white")
     for session in sessions:
@@ -535,8 +554,8 @@ def _render_chat_history(user_id: str, chat_id: str, limit: int = 12) -> None:
     if not messages:
         _render_system_notice("History", f"No stored messages for chat_id={chat_id}.")
         return
-    table = Table(title=f"History: {chat_id}", box=box.ROUNDED, border_style="bright_yellow", width=_panel_width())
-    table.add_column("Role", style="cyan")
+    table = Table(title=f"History: {chat_id}", box=box.ROUNDED, border_style=INFO_BORDER, width=_panel_width(), row_styles=["", "dim"])
+    table.add_column("Role", style="bright_cyan")
     table.add_column("Message", style="white")
     for message in messages[-limit:]:
         table.add_row(message.role, _clip(message.content, 72))
@@ -680,7 +699,7 @@ def _prompt_style() -> Style:
             "frame.border": "ansiyellow bold",
             "frame.label": "ansiyellow bold",
             "input.frame": "ansiyellow",
-            "input.status": "ansiyellow",
+            "input.status": "ansibrightblack",
             "input.text": "ansiwhite",
             "input.title": "ansiyellow bold",
             "input.user": "ansigreen bold",
@@ -691,7 +710,34 @@ def _prompt_style() -> Style:
 
 
 def _status_toolbar_lines(user_id: str, chat_id: str, debug: bool) -> list[str]:
-    return _wrap_status_items(_session_status_items(user_id, chat_id, debug), width=_input_frame_width())
+    items = dict(_session_status_items(user_id, chat_id, debug))
+    width = _input_frame_width()
+    groups = [
+        ("session", [("user", items["user"]), ("chat", items["chat"]), ("debug", items["debug"])]),
+        (
+            "models",
+            [
+                ("query", items["queryModel"]),
+                ("route", items["routeModel"]),
+                ("embed", items["embeddingModel"]),
+            ],
+        ),
+        (
+            "rag",
+            [
+                ("rewrite", items["rewriteModel"]),
+                ("curation", items["curationModel"]),
+                ("reranker", items["reranker"]),
+            ],
+        ),
+    ]
+    lines: list[str] = []
+    for group_name, group_items in groups:
+        wrapped = _wrap_status_items(group_items, width=max(24, width - 10))
+        for index, line in enumerate(wrapped):
+            prefix = f"{group_name:<8}" if index == 0 else " " * 8
+            lines.append(f"{prefix} {line}")
+    return lines
 
 
 def _wrap_status_items(items: list[tuple[str, str]], *, width: int) -> list[str]:
