@@ -378,7 +378,8 @@ def _build_status_snapshot(user_id: str, chat_id: str, debug: bool) -> dict[str,
     messages, load_error = _load_messages_for_status(user_id, chat_id)
     estimated_tokens = estimate_tokens([message.model_dump(mode="json") for message in messages]) if messages else 0
     policy = DEFAULT_CONTEXT_POLICIES["agent_default"]
-    model_window = _model_context_window_tokens(_model_label())
+    model_label = _model_label()
+    model_window = _model_context_window_tokens(model_label)
     return {
         "user_id": user_id,
         "chat_id": chat_id,
@@ -391,6 +392,7 @@ def _build_status_snapshot(user_id: str, chat_id: str, debug: bool) -> dict[str,
         "load_error": load_error,
         "estimated_tokens": estimated_tokens,
         "model_context_window": model_window,
+        "model_context_window_setting": _model_context_window_setting_hint(model_label),
         "model_context_percent": (estimated_tokens / model_window) if model_window else None,
         "agent_policy": "agent_default",
         "agent_budget": policy.token_budget,
@@ -424,7 +426,7 @@ def _status_context_table(snapshot: dict[str, object]) -> Table:
         table.add_row("model window", f"{_format_tokens(estimated_tokens)} / {_format_tokens(model_window)}")
         table.add_row("model usage", _format_percent(estimated_tokens / model_window))
     else:
-        table.add_row("model window", "not configured")
+        table.add_row("model window", f"window config missing ({snapshot['model_context_window_setting']})")
     table.add_row("stored messages", f"{snapshot['message_count']} / {snapshot['max_stored_messages']}")
     table.add_row("visible recent", f"{snapshot['visible_message_count']} / {RECENT_MESSAGE_LIMIT}")
     table.add_row("agent policy", str(snapshot["agent_policy"]))
@@ -787,7 +789,7 @@ def _prompt_style() -> Style:
             "frame.border": "ansiyellow bold",
             "frame.label": "ansiyellow bold",
             "input.frame": "ansiyellow",
-            "input.status": "ansibrightblack",
+            "input.status": "ansiwhite",
             "input.text": "ansiwhite",
             "input.title": "ansiyellow bold",
             "input.user": "ansigreen bold",
@@ -802,22 +804,6 @@ def _status_toolbar_lines(user_id: str, chat_id: str, debug: bool) -> list[str]:
     width = _input_frame_width()
     groups = [
         ("session", [("user", items["user"]), ("chat", items["chat"]), ("debug", items["debug"])]),
-        (
-            "models",
-            [
-                ("query", items["queryModel"]),
-                ("route", items["routeModel"]),
-                ("embed", items["embeddingModel"]),
-            ],
-        ),
-        (
-            "rag",
-            [
-                ("rewrite", items["rewriteModel"]),
-                ("curation", items["curationModel"]),
-                ("reranker", items["reranker"]),
-            ],
-        ),
     ]
     lines: list[str] = []
     for group_name, group_items in groups:
@@ -885,6 +871,11 @@ def _model_context_window_tokens(model_label: str) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed > 0 else None
+
+
+def _model_context_window_setting_hint(model_label: str) -> str:
+    model_name = model_label.split(":", 1)[-1]
+    return f"MODEL_CONTEXT_WINDOWS[{model_label} or {model_name}]"
 
 
 def _format_tokens(value: int) -> str:

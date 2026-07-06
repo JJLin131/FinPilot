@@ -177,7 +177,9 @@ def test_chat_status_shows_context_budget_without_guessing_model_window(monkeypa
     assert "Status" in result.output
     assert "Context" in result.output
     assert "model window" in result.output
-    assert "not configured" in result.output
+    assert "window config missing" in result.output
+    assert "MODEL_CONTEXT_WINDOWS" in result.output
+    assert "not configured" not in result.output
     assert "agent prompt" in result.output
     assert "agent trigger" in result.output
     assert "░" not in result.output
@@ -188,6 +190,20 @@ def test_model_context_window_uses_configured_model_value(monkeypatch):
     monkeypatch.setattr(cli.settings, "model_context_windows", {"deepseek-v4-pro": 96000})
 
     assert cli._model_context_window_tokens("deepseek:deepseek-v4-pro") == 96000
+
+
+def test_input_toolbar_omits_model_and_rag_details():
+    lines = cli._status_toolbar_lines("user-1", "chat-1", debug=False)
+    text = "\n".join(lines)
+
+    assert "session" in text
+    assert "user=user-1" in text
+    assert "chat=chat-1" in text
+    assert "debug=off" in text
+    assert "models" not in text
+    assert "rag" not in text
+    assert "query=" not in text
+    assert "rewrite=" not in text
 
 
 def test_chat_list_sessions_exits_without_prompt(monkeypatch):
