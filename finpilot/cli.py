@@ -31,6 +31,8 @@ from rich.table import Table
 from rich.text import Text
 
 from finpilot.config import settings
+from finpilot.memory.models import ChatSessionSummary, ChatTurn
+from finpilot.memory.stores import AgentChatMemoryStore
 from finpilot.models import AgentChatResponse
 from finpilot.mysql import connect_runtime_mysql
 from finpilot.responses import prepare_chat_response
@@ -52,6 +54,7 @@ AUTHOR = "JJLin131"
 PACKAGE_NAME = "finpilot"
 THINKING_TEXT = "[bold cyan]FinPilot is thinking[/] [dim]routing / retrieving / composing[/]"
 ServiceFactory = Callable[[], "FinPilotService"]
+ChatStoreFactory = Callable[[], AgentChatMemoryStore]
 
 console = Console()
 app = typer.Typer(
@@ -75,6 +78,7 @@ def _default_service_factory() -> "FinPilotService":
 
 
 service_factory: ServiceFactory = _default_service_factory
+chat_store_factory: ChatStoreFactory = AgentChatMemoryStore
 
 
 def _configure_cli_runtime() -> None:
@@ -117,14 +121,23 @@ def ask(
 def chat_command(
     user_id: str | None = typer.Option(None, "--user-id", "-u", help="User identity for memory isolation."),
     chat_id: str | None = typer.Option(None, "--chat-id", "-c", help="Conversation id for short-term memory."),
+    resume: str | None = typer.Option(None, "--resume", "-r", help="Resume an existing conversation by chat id."),
+    list_sessions: bool = typer.Option(False, "--list-sessions", help="List recent conversations and exit."),
     debug: bool = typer.Option(False, "--debug", help="Show route, retrieval, and tool details."),
 ) -> None:
     resolved_user_id = user_id or settings.finpilot_default_user_id
-    current_chat_id = chat_id or _new_chat_id()
+    if chat_id and resume:
+        _fail("Use either --chat-id or --resume, not both.")
+    if list_sessions:
+        _render_sessions(resolved_user_id)
+        return
+    current_chat_id = resume or chat_id or _new_chat_id()
     debug_enabled = debug
     history = FileHistory(str(_history_path()))
 
     _render_splash(resolved_user_id, current_chat_id, debug_enabled)
+    if resume:
+        _render_resume_notice(resolved_user_id, current_chat_id)
     _render_help()
     while True:
         try:
@@ -230,8 +243,19 @@ def _handle_slash_command(raw: str, user_id: str, chat_id: str, debug: bool) -> 
     if command == "/help":
         _render_help()
     elif command == "/new":
+        previous_chat_id = chat_id
         chat_id = argument or _new_chat_id()
-        _render_system_notice("New chat", f"chat_id={chat_id}")
+        _render_system_notice("New chat", f"chat_id={chat_id}\nprevious_chat_id={previous_chat_id}\nprevious chat is preserved")
+    elif command == "/resume":
+        if not argument:
+            _render_sessions(user_id)
+        else:
+            chat_id = argument
+            _render_resume_notice(user_id, chat_id)
+    elif command in {"/sessions", "/chats"}:
+        _render_sessions(user_id, limit=_parse_limit(argument, default=10))
+    elif command == "/history":
+        _render_chat_history(user_id, chat_id, limit=_parse_limit(argument, default=12))
     elif command == "/debug":
         if argument.lower() in {"on", "true", "1"}:
             debug = True
@@ -447,6 +471,9 @@ def _render_help() -> None:
     table.add_column("Action", style="white")
     table.add_row("/help", "Show commands")
     table.add_row("/new [chat-id]", "Start a new conversation")
+    table.add_row("/resume <chat-id>", "Resume a stored conversation")
+    table.add_row("/sessions [limit]", "List recent conversations")
+    table.add_row("/history [limit]", "Show current conversation memory")
     table.add_row("/debug on|off", "Toggle debug output")
     table.add_row("/context", "Show current chat settings")
     table.add_row("/clear", "Clear terminal")
@@ -461,6 +488,94 @@ def _render_help() -> None:
             expand=False,
         )
     )
+
+
+def _render_sessions(user_id: str, limit: int = 10) -> None:
+    try:
+        sessions = _list_chat_sessions(user_id, limit)
+    except Exception as exc:
+        _render_system_notice("Sessions", f"Unable to load sessions: {exc}")
+        return
+    if not sessions:
+        _render_system_notice("Sessions", f"No stored conversations for user={user_id}.")
+        return
+    table = Table(title="Recent conversations", box=box.ROUNDED, border_style="bright_yellow", width=_panel_width())
+    table.add_column("Chat", style="cyan")
+    table.add_column("Turns", justify="right", style="yellow")
+    table.add_column("Updated", style="white")
+    table.add_column("Last user message", style="white")
+    for session in sessions:
+        table.add_row(
+            session.chat_id,
+            str(session.message_count),
+            _format_timestamp(session.updated_at),
+            _clip(session.last_user_message or session.last_assistant_message or "", 44),
+        )
+    console.print(table)
+
+
+def _render_resume_notice(user_id: str, chat_id: str) -> None:
+    try:
+        messages = _load_chat_messages(user_id, chat_id)
+    except Exception as exc:
+        _render_system_notice("Resume", f"chat_id={chat_id}\nUnable to load stored messages: {exc}")
+        return
+    if messages:
+        _render_system_notice("Resume", f"chat_id={chat_id}\nloaded_messages={len(messages)}")
+    else:
+        _render_system_notice("Resume", f"chat_id={chat_id}\nNo stored messages found; continuing with this chat id.")
+
+
+def _render_chat_history(user_id: str, chat_id: str, limit: int = 12) -> None:
+    try:
+        messages = _load_chat_messages(user_id, chat_id)
+    except Exception as exc:
+        _render_system_notice("History", f"Unable to load history: {exc}")
+        return
+    if not messages:
+        _render_system_notice("History", f"No stored messages for chat_id={chat_id}.")
+        return
+    table = Table(title=f"History: {chat_id}", box=box.ROUNDED, border_style="bright_yellow", width=_panel_width())
+    table.add_column("Role", style="cyan")
+    table.add_column("Message", style="white")
+    for message in messages[-limit:]:
+        table.add_row(message.role, _clip(message.content, 72))
+    console.print(table)
+
+
+def _list_chat_sessions(user_id: str, limit: int) -> list[ChatSessionSummary]:
+    return chat_store_factory().list_sessions(user_id, limit)
+
+
+def _load_chat_messages(user_id: str, chat_id: str) -> list[ChatTurn]:
+    return chat_store_factory().get_messages(_memory_id(user_id, chat_id))
+
+
+def _memory_id(user_id: str, chat_id: str) -> str:
+    return f"chat:{user_id}:{chat_id}"
+
+
+def _parse_limit(value: str, *, default: int, minimum: int = 1, maximum: int = 50) -> int:
+    if not value:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        _render_system_notice("Limit", f"Invalid limit '{value}', using {default}.")
+        return default
+    return max(minimum, min(parsed, maximum))
+
+
+def _format_timestamp(value) -> str:
+    if value is None:
+        return "-"
+    return value.strftime("%Y-%m-%d %H:%M:%S") if hasattr(value, "strftime") else str(value)
+
+
+def _clip(value: str, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    return value[: max(0, max_chars - 1)] + "…"
 
 
 def _add_mysql_check(table: Table) -> None:

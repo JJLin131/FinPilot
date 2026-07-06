@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 from abc import ABC
+from datetime import datetime
 from typing import Any
 
 from finpilot.memory.definitions import STRUCTURED_MEMORY_FIELDS
-from finpilot.memory.models import ChatTurn
+from finpilot.memory.models import ChatSessionSummary, ChatTurn
 from finpilot.mysql import connect_runtime_mysql
 
 
@@ -41,6 +42,24 @@ class AgentChatMemoryStore(BaseStore):
         payload = json.loads(row[0])
         return [ChatTurn.model_validate(item) for item in payload]
 
+    def list_sessions(self, user_id: str, limit: int = 20) -> list[ChatSessionSummary]:
+        prefix = f"chat:{user_id}:"
+        cleaned_limit = max(1, min(limit, 100))
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    select memory_id, messages_json, updated_at
+                    from agent_chat_memory
+                    where memory_id like %s
+                    order by updated_at desc
+                    limit %s
+                    """,
+                    (f"{prefix}%", cleaned_limit),
+                )
+                rows = cursor.fetchall()
+        return [self._session_summary_from_row(row, prefix) for row in rows]
+
     def update_messages(self, memory_id: str, messages: list[ChatTurn]) -> None:
         payload = json.dumps([message.model_dump(mode="json") for message in messages], ensure_ascii=False)
         with self._connect() as connection:
@@ -58,6 +77,33 @@ class AgentChatMemoryStore(BaseStore):
         with self._connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("delete from agent_chat_memory where memory_id = %s", (memory_id,))
+
+    def _session_summary_from_row(self, row, prefix: str) -> ChatSessionSummary:
+        memory_id = str(row[0])
+        messages = self._messages_from_json(row[1])
+        return ChatSessionSummary(
+            chat_id=memory_id.removeprefix(prefix),
+            memory_id=memory_id,
+            message_count=len(messages),
+            last_user_message=self._last_message(messages, "user"),
+            last_assistant_message=self._last_message(messages, "assistant"),
+            updated_at=row[2] if isinstance(row[2], datetime) else None,
+        )
+
+    def _messages_from_json(self, payload: str | bytes | bytearray | None) -> list[ChatTurn]:
+        if not payload:
+            return []
+        try:
+            raw_messages = json.loads(payload)
+        except (TypeError, json.JSONDecodeError):
+            return []
+        return [ChatTurn.model_validate(item) for item in raw_messages]
+
+    def _last_message(self, messages: list[ChatTurn], role: str) -> str | None:
+        for message in reversed(messages):
+            if message.role == role:
+                return message.content
+        return None
 
 
 class UserProfileMemoryStore(BaseStore):

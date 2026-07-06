@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 from typer.testing import CliRunner
 
 from finpilot import cli
+from finpilot.memory.models import ChatSessionSummary, ChatTurn
 from finpilot.models import AgentChatResponse, AgentEvidence, RouteDecision, ToolInvocation
 
 
@@ -106,6 +108,63 @@ def test_chat_handles_slash_commands_and_message(monkeypatch, tmp_path):
     assert "Slash commands" in result.output
     assert "Debug" in result.output
     assert "New chat" in result.output
+
+
+def test_chat_can_list_history_and_resume(monkeypatch, tmp_path):
+    fake = FakeService()
+    prompts = iter(["/sessions 2", "/history 1", "/resume chat-2", "hello", "/exit"])
+
+    def fake_prompt(*args, **kwargs) -> str:
+        return next(prompts)
+
+    monkeypatch.setattr(cli, "service_factory", lambda: fake)
+    monkeypatch.setattr(cli, "_prompt_user_input", fake_prompt)
+    monkeypatch.setattr(cli, "_history_path", lambda: tmp_path / "history")
+    monkeypatch.setattr(
+        cli,
+        "_list_chat_sessions",
+        lambda user_id, limit: [
+            ChatSessionSummary(
+                chat_id="chat-2",
+                memory_id="chat:user-1:chat-2",
+                message_count=2,
+                last_user_message="previous question",
+                updated_at=datetime(2026, 7, 6, 8, 30, tzinfo=UTC),
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load_chat_messages",
+        lambda user_id, chat_id: [
+            ChatTurn(role="user", content=f"{chat_id} question"),
+            ChatTurn(role="assistant", content=f"{chat_id} answer"),
+        ],
+    )
+
+    result = runner.invoke(cli.app, ["chat", "--user-id", "user-1", "--chat-id", "chat-1"])
+
+    assert result.exit_code == 0
+    assert fake.calls == [("user-1", "chat-2", "hello")]
+    assert "Recent conversations" in result.output
+    assert "History: chat-1" in result.output
+    assert "Resume" in result.output
+
+
+def test_chat_list_sessions_exits_without_prompt(monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "_list_chat_sessions",
+        lambda user_id, limit: [
+            ChatSessionSummary(chat_id="chat-1", memory_id="chat:user-1:chat-1", message_count=2)
+        ],
+    )
+
+    result = runner.invoke(cli.app, ["chat", "--user-id", "user-1", "--list-sessions"])
+
+    assert result.exit_code == 0
+    assert "Recent conversations" in result.output
+    assert "chat-1" in result.output
 
 
 def test_cli_status_uses_runtime_model_settings(monkeypatch):

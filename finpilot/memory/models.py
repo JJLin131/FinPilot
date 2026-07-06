@@ -12,6 +12,15 @@ class ChatTurn(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class ChatSessionSummary(BaseModel):
+    chat_id: str
+    memory_id: str
+    message_count: int = 0
+    last_user_message: str | None = None
+    last_assistant_message: str | None = None
+    updated_at: datetime | None = None
+
+
 class SemanticMemoryItem(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
