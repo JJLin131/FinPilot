@@ -53,6 +53,7 @@ logging.getLogger("opentelemetry").setLevel(logging.ERROR)
 
 BRAND = "FinPilot"
 AUTHOR = "JJLin131"
+PROJECT_ADDRESS = "https://github.com/JJLin131/FinanceAgent"
 PACKAGE_NAME = "finpilot"
 THINKING_TEXT = "[bold bright_cyan]FinPilot is thinking[/] [dim]routing -> retrieving -> composing[/]"
 ServiceFactory = Callable[[], "FinPilotService"]
@@ -315,12 +316,12 @@ def _render_splash(user_id: str, chat_id: str, debug: bool) -> None:
     art = Text(
         "\n".join(
             [
-                " ______ _       ____  _ _       _",
-                "|  ____(_)     |  _ \\(_) |     | |",
-                "| |__   _ _ __ | |_) |_| | ___ | |_",
-                "|  __| | | '_ \\|  ___/ | |/ _ \\| __|",
-                "| |    | | | | | |   | | | (_) | |_",
-                "|_|    |_|_| |_|_|   |_|_|\\___/ \\__|",
+                "______ _       ____  _ _       _",
+                "| _____(_)     | __ \\(_) |     | |  ",
+                " | |__   _ _ __ | |_) |_| | ___ | |_",
+                " |  __| | | '_ \\|  ___/ | |/ _ \\| __|",
+                " | |    | | | | | |   | | | (_) | |_",
+                " |_|    |_|_| |_|_|   |_|_|\\___/ \\__|",
             ]
         ),
         style="bold bright_cyan",
@@ -331,10 +332,9 @@ def _render_splash(user_id: str, chat_id: str, debug: bool) -> None:
     grid.add_column()
     grid.add_row("author", f"[white]{AUTHOR}[/]")
     grid.add_row("version", f"[white]{_app_version()}[/]")
-    for label, value in _session_status_items(user_id, chat_id, debug):
-        grid.add_row(label, f"[white]{value}[/]")
-    grid.add_row("knowledge", "[white]shared finance knowledge[/]")
-    grid.add_row("memory", "[white]user scoped[/]")
+    grid.add_row("projectAddress", f"[white]{PROJECT_ADDRESS}[/]")
+#    for label, value in _session_status_items(user_id, chat_id, debug):
+#        grid.add_row(label, f"[white]{value}[/]")
     body = Group(
         Align.center(art),
         "[bold white]FinPilot Chat[/] [dim]finance agent CLI / local interactive session[/]",
