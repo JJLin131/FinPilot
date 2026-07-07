@@ -1,0 +1,2 @@
+{"suite":"grounded_answer","name":"salary_answer_mentions_approval","chat_id":"grounded-1","content":"工资发放前需要做什么？","expected_answer_contains":"审批"}
+{"suite":"grounded_answer","name":"receipt_answer_mentions_receipt","chat_id":"grounded-2","content":"转账后如何获取回单？","expected_answer_contains":"回单"}

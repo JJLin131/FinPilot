@@ -52,6 +52,17 @@ def issue_from_tool_failure(invocation: ToolInvocation) -> AgentIssue:
     )
 
 
+def dependency_degraded_issue(*, code: str, component: str, message: str, exc: Exception) -> AgentIssue:
+    return AgentIssue(
+        code=code,
+        component=component,
+        message=message,
+        severity="warning",
+        retryable=True,
+        detail=_safe_exception_detail(exc),
+    )
+
+
 def scrub_issue_details(issues: list[AgentIssue]) -> list[AgentIssue]:
     # 普通响应不返回内部异常细节，调用方仍可用 code/component 做判断。
     return [issue.model_copy(update={"detail": None}) for issue in issues]

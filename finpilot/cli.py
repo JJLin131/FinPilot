@@ -11,7 +11,6 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import httpx
 import typer
 from prompt_toolkit.application import Application
 from prompt_toolkit.formatted_text import HTML
@@ -36,7 +35,7 @@ from finpilot.memory.models import ChatSessionSummary, ChatTurn
 from finpilot.memory.service import MAX_STORED_MESSAGES, RECENT_MESSAGE_LIMIT
 from finpilot.memory.stores import AgentChatMemoryStore
 from finpilot.models import AgentChatResponse
-from finpilot.mysql import connect_runtime_mysql
+from finpilot.readiness import check_runtime_readiness
 from finpilot.responses import prepare_chat_response
 
 if TYPE_CHECKING:
@@ -183,17 +182,9 @@ def doctor() -> None:
     table.add_column("Status")
     table.add_column("Details")
 
-    _add_check(
-        table,
-        "DeepSeek API key",
-        bool(settings.deepseek_api_key),
-        "Configured" if settings.deepseek_api_key else "Set DEEPSEEK_API_KEY in .env.",
-    )
-    _add_mysql_check(table)
-    _add_http_check(table, "Ollama", settings.ollama_base_url, ["/api/tags", "/"])
-    _add_http_check(table, "Embedding service", settings.embedding_base_url, ["/api/tags", "/"])
-    _add_http_check(table, "Chroma", settings.chroma_base_url, ["/api/v1/heartbeat", "/api/v2/heartbeat", "/"])
-    _add_http_check(table, "Reranker", settings.reranker_base_url, ["/healthz", "/"])
+    readiness = check_runtime_readiness()
+    for check in readiness.checks:
+        table.add_row(check.name, _status_label(check.status), check.detail)
     console.print(table)
 
 
@@ -687,40 +678,12 @@ def _clip(value: str, max_chars: int) -> str:
     return value[: max(0, max_chars - 1)] + "…"
 
 
-def _add_mysql_check(table: Table) -> None:
-    try:
-        with connect_runtime_mysql() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("select 1")
-                cursor.fetchone()
-        _add_check(table, "MySQL", True, f"{settings.mysql_host}:{settings.mysql_port}/{settings.mysql_database}")
-    except Exception as exc:
-        _add_check(table, "MySQL", False, str(exc))
-
-
-def _add_http_check(table: Table, name: str, base_url: str, paths: list[str]) -> None:
-    ok, detail = _probe_http(base_url, paths)
-    _add_check(table, name, ok, detail)
-
-
-def _probe_http(base_url: str, paths: list[str]) -> tuple[bool, str]:
-    root = base_url.rstrip("/")
-    last_error = "not checked"
-    with httpx.Client(timeout=2) as client:
-        for path in paths:
-            url = root + path
-            try:
-                response = client.get(url)
-                if response.status_code < 500:
-                    return True, f"{url} -> HTTP {response.status_code}"
-                last_error = f"{url} -> HTTP {response.status_code}"
-            except Exception as exc:
-                last_error = f"{url} -> {exc}"
-    return False, last_error
-
-
-def _add_check(table: Table, name: str, ok: bool, details: str) -> None:
-    table.add_row(name, "[green]ok[/]" if ok else "[red]fail[/]", details)
+def _status_label(status: str) -> str:
+    if status == "ok":
+        return "[green]ok[/]"
+    if status == "degraded":
+        return "[yellow]degraded[/]"
+    return "[red]failed[/]"
 
 
 def _new_chat_id() -> str:

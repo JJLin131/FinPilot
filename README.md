@@ -32,7 +32,7 @@ Knowledge is shared across all users and managed by administrators. User isolati
   - Chroma on `8000`
   - reranker on `8081`
 
-Copy `.env.example` to `.env` and fill in `DEEPSEEK_API_KEY`.
+Copy `.env.example` to `.env` and fill in `DEEPSEEK_API_KEY`. The example values for MySQL, Langfuse, MinIO, Redis, and ClickHouse are local-only defaults. When `APP_ENV` is not `local`, FinPilot rejects missing DeepSeek credentials and known local secret defaults at startup.
 
 ## Local Development
 
@@ -54,6 +54,14 @@ Health check:
 ```powershell
 curl http://localhost:8099/healthz
 ```
+
+Readiness check:
+
+```powershell
+curl http://localhost:8099/readyz
+```
+
+`/healthz` only reports process liveness. `/readyz` reports lightweight runtime readiness for MySQL, BM25, Chroma, embedding, reranker, and LLM configuration without running expensive model inference.
 
 ## CLI
 
@@ -87,6 +95,8 @@ finpilot knowledge bootstrap
 ```
 
 ## Docker Startup
+
+Copy `.env.example` to `.env` before using the root `compose.yaml`. For the standalone AI lab compose file under `docker/`, copy `docker/.env.example` to `docker/.env`.
 
 ```powershell
 docker compose up --build
@@ -161,4 +171,10 @@ Existing databases with older nullable `tenant_id` columns remain compatible; Fi
 
 ## Evaluation Status
 
-Evaluation runner code is present under `finpilot/evals`, but datasets, pytest coverage, promptfoo config, and helper scripts are intentionally left as TODO work. See `TODO.md`.
+Evaluation runner code is present under `finpilot/evals`, with smoke JSONL suites under `evals/datasets`.
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_eval_datasets.py -q
+```
+
+`promptfoo.yaml` remains deferred until the first evaluation datasets are stable enough to act as release gates.

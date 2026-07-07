@@ -5,13 +5,18 @@ import logging
 import httpx
 
 from finpilot.config import settings
-from finpilot.models import RagMatch
+from finpilot.issues import dependency_degraded_issue
+from finpilot.models import AgentIssue, RagMatch
 
 logger = logging.getLogger(__name__)
 
 
 class RemoteReranker:
+    def __init__(self) -> None:
+        self._issues: list[AgentIssue] = []
+
     def rerank(self, query: str, candidates: list[RagMatch], limit: int = 5) -> list[RagMatch]:
+        self._issues = []
         if not settings.reranker_enabled or not candidates:
             return sorted(candidates, key=lambda item: item.score, reverse=True)[:limit]
         try:
@@ -45,6 +50,19 @@ class RemoteReranker:
             return sorted(reranked, key=lambda item: item.score, reverse=True)[:limit]
         except Exception as exc:
             logger.warning("Remote reranker failed, using local score order: %s", exc)
+            self._issues.append(
+                dependency_degraded_issue(
+                    code="RAG_RERANKER_DEGRADED",
+                    component="rag:reranker",
+                    message="Remote reranker failed; using local score order.",
+                    exc=exc,
+                )
+            )
             return sorted(candidates, key=lambda item: item.score, reverse=True)[:limit]
+
+    def consume_issues(self) -> list[AgentIssue]:
+        issues = list(self._issues)
+        self._issues = []
+        return issues
 
 

@@ -11,7 +11,7 @@ from finpilot.agent.agents import FinanceQaSubAgent, TransferSubAgent
 from finpilot.agent.router import IntentRouter
 from finpilot.agent.tools import ToolRegistry
 from finpilot.intents import UNKNOWN_INTENT_ANSWER
-from finpilot.issues import issue_from_tool_failure
+from finpilot.issues import dependency_degraded_issue, issue_from_tool_failure
 from finpilot.memory.service import MemoryManager
 from finpilot.models import AgentChatResponse, GraphState, RouteDecision
 from finpilot.observability.audit import AuditStore
@@ -203,13 +203,23 @@ class FinPilotGraph:
     def _audit_persist(self, state: dict[str, Any]) -> dict[str, Any]:
         graph_state = GraphState.model_validate(state)
         with self._timed_span(graph_state, "audit.persist"):
-            decision = self._to_route(graph_state)
-            if decision.normalized_intent == "UNKNOWN" and not graph_state.issues:
-                self.audit_store.record_unknown_intent(graph_state, decision)
-            for issue in graph_state.issues:
-                self.audit_store.record_issue(graph_state, issue)
-            for invocation in graph_state.tool_invocations:
-                self.audit_store.record_tool(graph_state, invocation)
+            try:
+                decision = self._to_route(graph_state)
+                if decision.normalized_intent == "UNKNOWN" and not graph_state.issues:
+                    self.audit_store.record_unknown_intent(graph_state, decision)
+                for issue in graph_state.issues:
+                    self.audit_store.record_issue(graph_state, issue)
+                for invocation in graph_state.tool_invocations:
+                    self.audit_store.record_tool(graph_state, invocation)
+            except Exception as exc:
+                graph_state.issues.append(
+                    dependency_degraded_issue(
+                        code="AUDIT_PERSIST_DEGRADED",
+                        component="audit",
+                        message="Audit persistence failed; response remains available with degraded diagnostics.",
+                        exc=exc,
+                    )
+                )
             return graph_state.model_dump()
 
     def _to_route(self, state: GraphState) -> RouteDecision:

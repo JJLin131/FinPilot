@@ -83,7 +83,17 @@ class ToolRegistry:
         query = str(parameters.get("query") or state.user_message)
         limit = int(parameters.get("limit") or 3)
         docs = [match.model_dump() for match in self.rag_service.search(query, limit=limit)]
-        return {"documents": docs}
+        issues = self._consume_rag_issues()
+        output: dict[str, Any] = {"documents": docs}
+        if issues:
+            output["issues"] = [issue.model_dump(mode="json") for issue in issues]
+        return output
+
+    def _consume_rag_issues(self):
+        consume = getattr(self.rag_service, "consume_issues", None)
+        if callable(consume):
+            return consume()
+        return []
 
     def _summarize(self, tool_name: str, status: str, output: dict[str, Any]) -> str:
         if status == "FAILED":

@@ -1,0 +1,2 @@
+{"suite":"tool_use","name":"salary_question_uses_knowledge_search","chat_id":"tool-1","content":"工资发放需要哪些审批？","expected_tool":"search_finance_knowledge"}
+{"suite":"tool_use","name":"balance_question_uses_knowledge_search","chat_id":"tool-2","content":"账户余额查询失败应该怎么处理？","expected_tool":"search_finance_knowledge"}

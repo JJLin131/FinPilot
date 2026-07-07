@@ -1,0 +1,2 @@
+{"suite":"rag_retrieval","name":"salary_policy_retrieves_salary_doc","chat_id":"rag-1","content":"工资发放审批规则是什么？","relevant_document_ids":["resource-finance-salary-policy"]}
+{"suite":"rag_retrieval","name":"bank_status_retrieves_status_doc","chat_id":"rag-2","content":"银行状态码异常处理规则是什么？","relevant_document_ids":["resource-finance-bank-status-policy"]}

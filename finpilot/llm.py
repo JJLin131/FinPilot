@@ -7,6 +7,8 @@ import httpx
 
 from finpilot.config import settings
 from finpilot.intents import INTENT_ORDER
+from finpilot.issues import dependency_degraded_issue
+from finpilot.models import AgentIssue
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +141,7 @@ User question:
 
     def __init__(self, client=None):
         self.client = client or self._build_client()
+        self._issues: list[AgentIssue] = []
 
     def _build_client(self):
         if settings.routing_provider.lower() == "deepseek":
@@ -210,6 +213,7 @@ Context:
         )
 
     def answer_with_context(self, query: str, context_chunks: list[str]) -> str:
+        self._issues = []
         if not context_chunks:
             return "当前知识库没有命中足够相关的规则，请补充更具体的问题。"
         try:
@@ -219,5 +223,18 @@ Context:
             )
         except Exception as exc:
             logger.warning("Answer generation via configured LLM failed, using fallback synthesis: %s", exc)
+            self._issues.append(
+                dependency_degraded_issue(
+                    code="ANSWER_LLM_DEGRADED",
+                    component="answer_llm",
+                    message="Answer generation model failed; using retrieved evidence fallback.",
+                    exc=exc,
+                )
+            )
             return f"根据当前知识库，优先参考以下内容：{context_chunks[0]}"
+
+    def consume_issues(self) -> list[AgentIssue]:
+        issues = list(self._issues)
+        self._issues = []
+        return issues
 

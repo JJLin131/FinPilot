@@ -17,6 +17,7 @@ from finpilot.llm import FinanceAnsweringService
 from finpilot.models import (
     AgentDecision,
     AgentEvidence,
+    AgentIssue,
     GraphState,
     LoopContext,
     LoopStepRecord,
@@ -170,6 +171,8 @@ class AgentRuntime:
         loop_context.evidence_sufficient = bool(state.evidence)
 
     def _merge_tool_output(self, state: GraphState, output: dict) -> None:
+        for item in output.get("issues", []):
+            state.issues.append(AgentIssue.model_validate(item))
         documents = output.get("documents", [])
         for item in documents:
             match = RagMatch(**item)
@@ -191,6 +194,9 @@ class AgentRuntime:
         if answer_context.get("long_term_memory"):
             snippets.append(json.dumps({"long_term_memory": answer_context["long_term_memory"]}, ensure_ascii=False))
         state.final_answer = self.answering_service.answer_with_context(state.user_message, snippets)
+        consume = getattr(self.answering_service, "consume_issues", None)
+        if callable(consume):
+            state.issues.extend(consume())
 
     def _sync_loop_state(self, state: GraphState, loop_context: LoopContext) -> None:
         state.loop_count = loop_context.step_index

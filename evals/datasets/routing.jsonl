@@ -1,0 +1,2 @@
+{"suite":"routing","name":"finance_salary_policy_routes_to_qa","chat_id":"routing-1","content":"工资发放审批规则是什么？","expected_intent":"FINANCE_KNOWLEDGE_QA"}
+{"suite":"routing","name":"bank_receipt_policy_routes_to_qa","chat_id":"routing-2","content":"工商银行转账回单什么时候可以下载？","expected_intent":"FINANCE_KNOWLEDGE_QA"}

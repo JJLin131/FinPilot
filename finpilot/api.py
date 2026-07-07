@@ -7,6 +7,7 @@ from finpilot.evals import EvalRunner
 from finpilot.models import AgentChatResponse, FinPilotChatRequest
 from finpilot.rag.lifecycle import KnowledgeLifecycleService
 from finpilot.rag.models import KnowledgeDocumentRequest, KnowledgeDocumentResult
+from finpilot.readiness import RuntimeReadiness, check_runtime_readiness
 from finpilot.responses import prepare_chat_response
 
 
@@ -19,6 +20,10 @@ def create_app() -> FastAPI:
     @app.get("/healthz")
     def healthz():
         return {"status": "ok"}
+
+    @app.get("/readyz", response_model=RuntimeReadiness)
+    def readyz():
+        return check_runtime_readiness()
 
     @app.on_event("shutdown")
     def shutdown_service():

@@ -244,35 +244,24 @@ def test_cli_status_uses_runtime_model_settings(monkeypatch):
 
 
 def test_doctor_renders_checks(monkeypatch):
-    class FakeCursor:
-        def __enter__(self):
-            return self
+    from finpilot.readiness import ReadinessCheck, RuntimeReadiness
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def execute(self, sql: str) -> None:
-            self.sql = sql
-
-        def fetchone(self):
-            return (1,)
-
-    class FakeConnection:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def cursor(self):
-            return FakeCursor()
-
-    monkeypatch.setattr(cli, "connect_runtime_mysql", lambda: FakeConnection())
-    monkeypatch.setattr(cli, "_probe_http", lambda base_url, paths: (True, f"{base_url} ok"))
-    monkeypatch.setattr(cli.settings, "deepseek_api_key", "sk-test")
+    monkeypatch.setattr(
+        cli,
+        "check_runtime_readiness",
+        lambda: RuntimeReadiness(
+            status="degraded",
+            checks=[
+                ReadinessCheck(name="mysql", status="ok", detail="select 1 succeeded"),
+                ReadinessCheck(name="bm25", status="degraded", detail="index not found"),
+            ],
+        ),
+    )
 
     result = runner.invoke(cli.app, ["doctor"])
 
     assert result.exit_code == 0
     assert "FinPilot doctor" in result.output
-    assert "MySQL" in result.output
+    assert "mysql" in result.output
+    assert "bm25" in result.output
+    assert "degraded" in result.output

@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 
 from finpilot.config import settings
-from finpilot.models import RagMatch
+from finpilot.issues import dependency_degraded_issue
+from finpilot.models import AgentIssue, RagMatch
 from finpilot.rag.bm25 import Bm25ChunkIndex
 from finpilot.rag.embeddings import OllamaEmbeddingClient
 from finpilot.rag.vector_store import ChromaVectorStore
@@ -41,8 +42,10 @@ class HybridCandidateRetriever:
         self.vector_retriever = vector_retriever
         self.bm25_retriever = bm25_retriever
         self.rrf_k = max(1, rrf_k or settings.rrf_k)
+        self._issues: list[AgentIssue] = []
 
     def retrieve(self, domain: str, query: str, limit: int) -> list[RagMatch]:
+        self._issues = []
         fusion: dict[str, tuple[RagMatch, float]] = {}
         self._add_safely(fusion, lambda: self.vector_retriever.retrieve(domain, query, limit), "vector")
         self._add_safely(fusion, lambda: self.bm25_retriever.retrieve(domain, query, limit), "bm25")
@@ -57,11 +60,34 @@ class HybridCandidateRetriever:
             for match, score in sorted(fusion.values(), key=lambda item: item[1], reverse=True)[:limit]
         ]
 
+    def consume_issues(self) -> list[AgentIssue]:
+        issues = list(self._issues)
+        self._issues = []
+        return issues
+
     def _add_safely(self, fusion: dict[str, tuple[RagMatch, float]], call, source: str) -> None:
         try:
             self._add(fusion, call())
         except Exception as exc:
             logger.warning("%s candidate retrieval failed; continuing with remaining retrievers: %s", source, exc)
+            if source == "vector":
+                self._issues.append(
+                    dependency_degraded_issue(
+                        code="RAG_VECTOR_RETRIEVAL_DEGRADED",
+                        component="rag:vector",
+                        message="Vector retrieval failed; continuing with remaining retrievers.",
+                        exc=exc,
+                    )
+                )
+            else:
+                self._issues.append(
+                    dependency_degraded_issue(
+                        code="RAG_BM25_RETRIEVAL_DEGRADED",
+                        component="rag:bm25",
+                        message="BM25 retrieval failed; continuing with remaining retrievers.",
+                        exc=exc,
+                    )
+                )
 
     def _add(self, fusion: dict[str, tuple[RagMatch, float]], results: list[RagMatch]) -> None:
         for rank, match in enumerate(results):

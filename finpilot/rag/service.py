@@ -6,7 +6,7 @@ from datetime import date
 
 from finpilot.config import settings
 from finpilot.llm import QueryRewriteService
-from finpilot.models import RagMatch
+from finpilot.models import AgentIssue, RagMatch
 from finpilot.rag.bm25 import Bm25ChunkIndex
 from finpilot.rag.chunker import KnowledgeChunker
 from finpilot.rag.curation import RagCurationAgent
@@ -45,6 +45,7 @@ class RagKnowledgeService:
             VectorCandidateRetriever(self.embedding_client, self.vector_store),
             Bm25CandidateRetriever(self.bm25_index),
         )
+        self._issues: list[AgentIssue] = []
 
     def bootstrap_resources(self) -> list[KnowledgeDocumentResult]:
         results: list[KnowledgeDocumentResult] = []
@@ -86,9 +87,11 @@ class RagKnowledgeService:
         )
 
     def search(self, query: str, limit: int = 5) -> list[RagMatch]:
+        self._issues = []
         candidates: dict[str, RagMatch] = {}
         for rewritten in self.query_rewriter.rewrite(query):
             retrieved = self.retriever.retrieve("FINANCE", rewritten, max(limit * 4, 12))
+            self._issues.extend(self._consume_component_issues(self.retriever))
             for match in retrieved:
                 if not self.registry.is_active(match.document_id, "FINANCE", date.today()):
                     continue
@@ -96,7 +99,14 @@ class RagKnowledgeService:
                 current = candidates.get(key)
                 if current is None or match.score > current.score:
                     candidates[key] = match
-        return self.reranker.rerank(query, list(candidates.values()), limit)
+        reranked = self.reranker.rerank(query, list(candidates.values()), limit)
+        self._issues.extend(self._consume_component_issues(self.reranker))
+        return reranked
+
+    def consume_issues(self) -> list[AgentIssue]:
+        issues = list(self._issues)
+        self._issues = []
+        return issues
 
     def delete_expired_documents(self) -> int:
         expired = self.registry.expired_document_ids(date.today())
@@ -175,6 +185,12 @@ class RagKnowledgeService:
             raise ValueError("Knowledge document requires document_id.")
         if not request.domain.strip():
             raise ValueError("Knowledge document requires domain.")
+
+    def _consume_component_issues(self, component) -> list[AgentIssue]:
+        consume = getattr(component, "consume_issues", None)
+        if callable(consume):
+            return consume()
+        return []
 
     def _resource_document_id(self, file_name: str) -> str:
         return f"resource-finance-{uuid.uuid5(uuid.NAMESPACE_URL, file_name)}"

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -90,6 +90,21 @@ class Settings(BaseSettings):
     mysql_user: str = "root"
     mysql_password: str = "123456"
     mysql_database: str = "work_memory"
+
+    @model_validator(mode="after")
+    def validate_non_local_runtime_settings(self):
+        if self.app_env.lower() == "local":
+            return self
+        errors = []
+        if self.ai_provider.lower() == "deepseek" and not (self.deepseek_api_key or "").strip():
+            errors.append("DEEPSEEK_API_KEY is required when APP_ENV is not local.")
+        if self.mysql_user == "root" and self.mysql_password == "123456":
+            errors.append("MYSQL_PASSWORD must not use the root/123456 development default when APP_ENV is not local.")
+        if self.langfuse_enabled and self.langfuse_secret_key in {None, "", "sk-lf-local"}:
+            errors.append("LANGFUSE_SECRET_KEY must not use the local default when APP_ENV is not local.")
+        if errors:
+            raise ValueError(" ".join(errors))
+        return self
 
 
 settings = Settings()
