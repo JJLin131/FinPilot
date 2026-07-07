@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
@@ -42,6 +42,7 @@ class ToolSpec:
     arguments: dict[str, str]
     args_model: type[BaseModel] | None
     executor: Callable[[GraphState, dict[str, Any]], dict[str, Any]]
+    risk_level: Literal["low", "medium", "high"] = "low"
 
     def card(self) -> ToolCard:
         return ToolCard(
@@ -77,14 +78,23 @@ class ToolRegistry:
                 arguments={"account_no": "string", "amount": "number", "currency": "string, optional"},
                 args_model=TransferMockFundsArgs,
                 executor=self._transfer_mock_funds,
+                risk_level="high",
             )
         )
+        from finpilot.agent.tooling.files import register_file_tools
+        from finpilot.agent.tooling.web import register_web_tools
+
+        register_file_tools(self)
+        register_web_tools(self)
 
     def register(self, spec: ToolSpec) -> None:
         self._tools[spec.name] = spec
 
     def list_allowed(self, tool_names: list[str]) -> list[ToolCard]:
         return [self._tools[name].card() for name in tool_names if name in self._tools]
+
+    def list_tools(self) -> list[ToolCard]:
+        return [spec.card() for spec in self._tools.values()]
 
     def invoke(self, state: GraphState, tool_name: str, **parameters: Any) -> ToolInvocation:
         started = time.perf_counter()
@@ -167,6 +177,9 @@ class ToolRegistry:
                 return "retrieved 0 documents"
             top = documents[0]
             return f"retrieved {len(documents)} documents; top_document={top.get('document_id')}"
+        content = output.get("content")
+        if isinstance(content, list):
+            return f"{tool_name} returned {len(content)} content item(s)"
         return f"{tool_name} succeeded"
 
     def _safety_output(self, message: str, review) -> dict[str, Any]:

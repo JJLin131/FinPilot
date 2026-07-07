@@ -48,7 +48,7 @@ class SafetyReviewService:
         if argument_result.action != "ALLOW":
             return argument_result
         validated = argument_result.sanitized_payload or {}
-        risk_result = self.operation_risk_reviewer.review(state, spec.name, validated, reason)
+        risk_result = self.operation_risk_reviewer.review(state, spec, validated, reason)
         if risk_result.action == "REQUIRE_APPROVAL":
             if not self.interactive_approval or not risk_result.findings:
                 return self._with_action(risk_result, "BLOCK")

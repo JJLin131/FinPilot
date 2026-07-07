@@ -32,6 +32,7 @@ from rich.table import Table
 from rich.text import Text
 
 from finpilot.config import settings
+from finpilot.agent.tooling.file_access import FileAccessStore
 from finpilot.context.compression import DEFAULT_CONTEXT_POLICIES, estimate_tokens
 from finpilot.memory.models import ChatSessionSummary, ChatTurn
 from finpilot.memory.service import MAX_STORED_MESSAGES, RECENT_MESSAGE_LIMIT
@@ -78,7 +79,9 @@ app = typer.Typer(
     rich_markup_mode=None,
 )
 knowledge_app = typer.Typer(help="Manage shared FinPilot knowledge resources.", rich_markup_mode=None)
+tools_app = typer.Typer(help="Manage FinPilot agent tools.", rich_markup_mode=None)
 app.add_typer(knowledge_app, name="knowledge")
+app.add_typer(tools_app, name="tools")
 
 
 def _default_service_factory(
@@ -237,6 +240,79 @@ def bootstrap_knowledge() -> None:
     for result in results:
         table.add_row(result.document_id, result.domain, result.status, str(result.chunk_count))
     console.print(table)
+
+
+@tools_app.command("allow-read")
+def allow_tool_read(
+    path: Path = typer.Argument(..., help="File or directory to make readable by file tools."),
+    recursive: bool = typer.Option(False, "--recursive", help="Allow files below this directory recursively."),
+) -> None:
+    _tool_access_store().allow("read", path, recursive=recursive)
+    _render_system_notice("Tool access", f"read allowed\npath={path.expanduser().resolve(strict=False)}\nrecursive={recursive}")
+
+
+@tools_app.command("allow-write")
+def allow_tool_write(
+    path: Path = typer.Argument(..., help="File or directory to make writable by file tools."),
+    recursive: bool = typer.Option(False, "--recursive", help="Allow files below this directory recursively."),
+) -> None:
+    _tool_access_store().allow("write", path, recursive=recursive)
+    _render_system_notice("Tool access", f"write allowed\npath={path.expanduser().resolve(strict=False)}\nrecursive={recursive}")
+
+
+@tools_app.command("revoke-read")
+def revoke_tool_read(path: Path = typer.Argument(..., help="File or directory to remove from readable paths.")) -> None:
+    removed = _tool_access_store().revoke("read", path)
+    _render_system_notice("Tool access", f"read revoked={removed}\npath={path.expanduser().resolve(strict=False)}")
+
+
+@tools_app.command("revoke-write")
+def revoke_tool_write(path: Path = typer.Argument(..., help="File or directory to remove from writable paths.")) -> None:
+    removed = _tool_access_store().revoke("write", path)
+    _render_system_notice("Tool access", f"write revoked={removed}\npath={path.expanduser().resolve(strict=False)}")
+
+
+@tools_app.command("access")
+def render_tool_access() -> None:
+    snapshot = _tool_access_store().snapshot()
+    table = Table(title="Tool file access", box=box.ROUNDED, border_style=INFO_BORDER)
+    table.add_column("Mode", style="bright_cyan")
+    table.add_column("Path", style="white", no_wrap=True, overflow="ignore")
+    table.add_column("Recursive", style="bright_yellow")
+    rows = 0
+    for mode in ("read", "write"):
+        for rule in snapshot[mode]:
+            table.add_row(mode, str(rule["path"]), str(rule["recursive"]).lower())
+            rows += 1
+    if rows == 0:
+        table.add_row("-", "No file access rules configured.", "-")
+    console.print(table)
+    for mode in ("read", "write"):
+        for rule in snapshot[mode]:
+            typer.echo(f"{mode}: {rule['path']} recursive={str(rule['recursive']).lower()}")
+    console.print_json(json.dumps(snapshot, ensure_ascii=False))
+
+
+@tools_app.command("list")
+def render_tools() -> None:
+    from finpilot.agent.tools import ToolRegistry
+
+    class EmptyRagService:
+        def search(self, query: str, limit: int = 3):
+            del query, limit
+            return []
+
+    registry = ToolRegistry(EmptyRagService())
+    table = Table(title="Registered tools", box=box.ROUNDED, border_style=INFO_BORDER)
+    table.add_column("Tool", style="bright_cyan")
+    table.add_column("Description", style="white")
+    for card in registry.list_tools():
+        table.add_row(card.name, card.description)
+    console.print(table)
+
+
+def _tool_access_store() -> FileAccessStore:
+    return FileAccessStore(Path(settings.tool_access_path))
 
 
 class SlashCommandResult:

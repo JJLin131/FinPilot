@@ -189,11 +189,25 @@ class AgentRuntime:
                     summary={"document_id": item["document_id"], "score": item["score"]},
                 )
             )
+        for item in output.get("content", []):
+            if not isinstance(item, dict):
+                continue
+            state.evidence.append(
+                AgentEvidence(
+                    tool_name=self._content_tool_name(item, output),
+                    source=str(item.get("source") or ""),
+                    summary={
+                        "title": item.get("title"),
+                        "metadata": item.get("metadata") or {},
+                    },
+                )
+            )
 
     def _compose_final_answer(self, state: GraphState, subagent_context: SubAgentContext, loop_context: LoopContext) -> None:
         if state.final_answer:
             return
         snippets = [match.text for match in state.reranked_docs[:3]]
+        snippets.extend(self._content_snippets(loop_context))
         answer_context = build_answer_prompt_context(build_session_context(state), subagent_context, loop_context)
         if answer_context.get("long_term_memory"):
             snippets.append(json.dumps({"long_term_memory": answer_context["long_term_memory"]}, ensure_ascii=False))
@@ -201,6 +215,34 @@ class AgentRuntime:
         consume = getattr(self.answering_service, "consume_issues", None)
         if callable(consume):
             state.issues.extend(consume())
+
+    def _content_snippets(self, loop_context: LoopContext) -> list[str]:
+        snippets: list[str] = []
+        for step in loop_context.step_history:
+            output = step.observation.output if step.observation is not None else {}
+            content = output.get("content", []) if isinstance(output, dict) else []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                text = str(item.get("text") or "").strip()
+                if text:
+                    snippets.append(text[:6000])
+        return snippets[:5]
+
+    def _content_tool_name(self, item: dict, output: dict) -> str:
+        if item.get("tool_name"):
+            return str(item["tool_name"])
+        if output.get("tool_name"):
+            return str(output["tool_name"])
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        kind = metadata.get("kind")
+        if kind == "file":
+            return "read_file"
+        if kind == "web_search":
+            return "web_search"
+        if kind == "web_page":
+            return "fetch_url"
+        return "content"
 
     def _sync_loop_state(self, state: GraphState, loop_context: LoopContext) -> None:
         state.loop_count = loop_context.step_index

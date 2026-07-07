@@ -23,7 +23,8 @@ class FinanceQaSubAgent:
         return state
 
     def build_context(self, tools: ToolRegistry) -> SubAgentContext:
-        tool_names = ["search_finance_knowledge"]
+        configured = settings.agent_tool_allowlists.get(self.name)
+        tool_names = list(configured) if configured is not None else ["search_finance_knowledge"]
         if settings.enable_demo_risk_tools:
             tool_names.append("transfer_mock_funds")
         return SubAgentContext(

@@ -90,6 +90,18 @@ Useful REPL commands:
 /exit
 ```
 
+Manage agent tool access:
+
+```powershell
+finpilot tools list
+finpilot tools allow-read .\docs --recursive
+finpilot tools allow-write .\scratch --recursive
+finpilot tools access
+finpilot tools revoke-read .\docs
+```
+
+File tools are registered by default but are not visible to `QueryAgent` unless `AGENT_TOOL_ALLOWLISTS` exposes them. `write_file` is treated as a high-risk `write_*` operation and requires interactive approval. Web search uses Brave Search API through `BRAVE_SEARCH_API_KEY`; `fetch_url` only accepts public `http` and `https` URLs and blocks local/private network targets.
+
 Bootstrap shared knowledge resources:
 
 ```powershell

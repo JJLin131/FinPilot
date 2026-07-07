@@ -28,7 +28,11 @@ class Settings(BaseSettings):
     safety_response_provider: str = "deepseek"
     safety_response_model_name: str = "deepseek-v4-pro"
     enable_demo_risk_tools: bool = False
-    tool_risk_policies: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    agent_tool_allowlists: dict[str, list[str]] = Field(default_factory=dict)
+    tool_access_path: Path = Field(default=Path("./data/tool-access.json"))
+    brave_search_api_key: str | None = None
+    web_search_timeout_seconds: int = 10
+    web_fetch_max_chars: int = 6000
 
     audit_backend: str = "mysql"
     audit_dir: Path = Field(default=Path("./data/python-audit"))

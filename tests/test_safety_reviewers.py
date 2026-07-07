@@ -24,6 +24,13 @@ class DemoArgs(BaseModel):
 class DemoSpec:
     name = "demo_tool"
     args_model = DemoArgs
+    risk_level = "low"
+
+
+class HighRiskSpec:
+    name = "neutral_tool_name"
+    args_model = DemoArgs
+    risk_level = "high"
 
 
 def _state(message: str = "what finance rule applies?") -> GraphState:
@@ -62,19 +69,29 @@ def test_argument_reviewer_blocks_missing_extra_wrong_type_and_out_of_range_argu
         assert expected_error_type in {error["type"] for error in result.findings[0].detail["errors"]}
 
 
-def test_operation_risk_reviewer_requires_approval_for_risky_tool_names():
-    result = OperationRiskReviewer().review(_state(), "transfer_funds", {"amount": 100}, "send money")
+def test_operation_risk_reviewer_requires_approval_for_high_risk_tool_spec():
+    result = OperationRiskReviewer().review(_state(), HighRiskSpec(), {"amount": 100}, "send money")
 
     assert result.action == "REQUIRE_APPROVAL"
     assert result.findings[0].code == "TOOL_OPERATION_REQUIRES_APPROVAL"
+    assert result.findings[0].detail["tool_name"] == "neutral_tool_name"
+    assert result.findings[0].detail["risk_level"] == "high"
+
+
+def test_operation_risk_reviewer_does_not_use_tool_name_prefixes():
+    spec = type("TransferNamedSpec", (), {"name": "transfer_funds", "risk_level": "low"})()
+
+    result = OperationRiskReviewer().review(_state(), spec, {"amount": 100}, "send money")
+
+    assert result.action == "ALLOW"
 
 
 def test_approval_service_uses_session_approval_for_matching_risk():
     approvals = ApprovalService(callback=lambda request: ApprovalDecision(scope="session"))
-    request = OperationRiskReviewer().review(_state(), "export_transactions", {}, "export")
+    request = OperationRiskReviewer().review(_state(), HighRiskSpec(), {}, "export")
 
-    first = approvals.resolve(request.findings[0], tool_name="export_transactions", parameters={}, state=_state())
-    second = approvals.resolve(request.findings[0], tool_name="export_transactions", parameters={}, state=_state())
+    first = approvals.resolve(request.findings[0], tool_name=HighRiskSpec.name, parameters={}, state=_state())
+    second = approvals.resolve(request.findings[0], tool_name=HighRiskSpec.name, parameters={}, state=_state())
 
     assert first.approved is True
     assert second.approved is True
@@ -83,14 +100,14 @@ def test_approval_service_uses_session_approval_for_matching_risk():
 
 def test_approval_service_scopes_session_approval_to_user_chat_and_parameters():
     approvals = ApprovalService(callback=lambda request: ApprovalDecision(scope="session"))
-    finding = OperationRiskReviewer().review(_state(), "transfer_funds", {"amount": 100}, "transfer").findings[0]
+    finding = OperationRiskReviewer().review(_state(), HighRiskSpec(), {"amount": 100}, "transfer").findings[0]
 
-    first = approvals.resolve(finding, tool_name="transfer_funds", parameters={"amount": 100}, state=_state())
-    same_scope = approvals.resolve(finding, tool_name="transfer_funds", parameters={"amount": 100}, state=_state())
-    different_parameters = approvals.resolve(finding, tool_name="transfer_funds", parameters={"amount": 200}, state=_state())
+    first = approvals.resolve(finding, tool_name=HighRiskSpec.name, parameters={"amount": 100}, state=_state())
+    same_scope = approvals.resolve(finding, tool_name=HighRiskSpec.name, parameters={"amount": 100}, state=_state())
+    different_parameters = approvals.resolve(finding, tool_name=HighRiskSpec.name, parameters={"amount": 200}, state=_state())
     different_chat = approvals.resolve(
         finding,
-        tool_name="transfer_funds",
+        tool_name=HighRiskSpec.name,
         parameters={"amount": 100},
         state=_state().model_copy(update={"chat_id": "chat-2"}),
     )
@@ -107,28 +124,13 @@ def test_approval_service_does_not_reuse_expired_session_approval():
         callback=lambda request: ApprovalDecision(scope="session"),
         session_ttl=timedelta(seconds=-1),
     )
-    finding = OperationRiskReviewer().review(_state(), "transfer_funds", {"amount": 100}, "transfer").findings[0]
+    finding = OperationRiskReviewer().review(_state(), HighRiskSpec(), {"amount": 100}, "transfer").findings[0]
 
-    first = approvals.resolve(finding, tool_name="transfer_funds", parameters={"amount": 100}, state=_state())
-    second = approvals.resolve(finding, tool_name="transfer_funds", parameters={"amount": 100}, state=_state())
+    first = approvals.resolve(finding, tool_name=HighRiskSpec.name, parameters={"amount": 100}, state=_state())
+    second = approvals.resolve(finding, tool_name=HighRiskSpec.name, parameters={"amount": 100}, state=_state())
 
     assert first.reused is False
     assert second.reused is False
-
-
-def test_operation_risk_reviewer_uses_declarative_policy():
-    reviewer = OperationRiskReviewer(
-        policies={
-            "quote_price": {"risk_level": "low", "approval_required": False},
-            "export_statement": {"risk_level": "high", "approval_required": True},
-        }
-    )
-
-    assert reviewer.review(_state(), "quote_price", {}, "quote").action == "ALLOW"
-    result = reviewer.review(_state(), "export_statement", {}, "export")
-
-    assert result.action == "REQUIRE_APPROVAL"
-    assert result.findings[0].detail["risk_level"] == "high"
 
 
 def test_redaction_masks_sensitive_fields_and_patterns():

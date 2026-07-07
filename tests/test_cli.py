@@ -350,3 +350,25 @@ def test_doctor_renders_checks(monkeypatch):
     assert "mysql" in result.output
     assert "bm25" in result.output
     assert "degraded" in result.output
+
+
+def test_tools_commands_manage_file_access_rules(monkeypatch, tmp_path):
+    access_path = tmp_path / "tool-access.json"
+    readable = tmp_path / "readable"
+    writable = tmp_path / "writable"
+    monkeypatch.setattr(cli.settings, "tool_access_path", access_path)
+
+    read_result = runner.invoke(cli.app, ["tools", "allow-read", str(readable), "--recursive"])
+    write_result = runner.invoke(cli.app, ["tools", "allow-write", str(writable), "--recursive"])
+    access_result = runner.invoke(cli.app, ["tools", "access"])
+    revoke_result = runner.invoke(cli.app, ["tools", "revoke-read", str(readable)])
+
+    assert read_result.exit_code == 0
+    assert write_result.exit_code == 0
+    assert access_result.exit_code == 0
+    assert revoke_result.exit_code == 0
+    payload = json.loads(access_path.read_text(encoding="utf-8"))
+    assert payload["read"] == []
+    assert payload["write"][0]["path"] == str(writable.resolve(strict=False))
+    assert str(readable.resolve(strict=False)) in access_result.output
+    assert str(writable.resolve(strict=False)) in access_result.output
