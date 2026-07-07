@@ -4,6 +4,8 @@ import json
 import logging
 import contextlib
 import io
+import threading
+import time
 import uuid
 import warnings
 from collections.abc import Callable
@@ -56,7 +58,8 @@ BRAND = "FinPilot"
 AUTHOR = "JJLin131"
 PROJECT_ADDRESS = "https://github.com/JJLin131/FinanceAgent"
 PACKAGE_NAME = "finpilot"
-THINKING_TEXT = "[bold bright_cyan]FinPilot is thinking[/] [dim]routing -> retrieving -> composing[/]"
+THINKING_TEXT = "[bold bright_cyan]FinPilot is thinking[/] [bright_yellow]已思考 {elapsed}[/] [dim]routing -> retrieving -> composing[/]"
+THINKING_REFRESH_SECONDS = 0.25
 ServiceFactory = Callable[..., "FinPilotService"]
 ChatStoreFactory = Callable[[], AgentChatMemoryStore]
 
@@ -65,6 +68,7 @@ ASSISTANT_BORDER = "bright_cyan"
 USER_BORDER = "bright_green"
 INFO_BORDER = "bright_blue"
 DEBUG_BORDER = "magenta"
+_ACTIVE_THINKING_STATUSES: list["_ThinkingStatus"] = []
 
 console = Console()
 app = typer.Typer(
@@ -290,10 +294,10 @@ def _run_chat(
     service: FinPilotService | None = None
     try:
         service = _create_service(interactive_approval=interactive_approval)
-        if quiet or interactive_approval:
+        if quiet:
             response = service.chat(user_id, chat_id, content)
         else:
-            with console.status(status_message, spinner="dots", spinner_style="cyan"):
+            with _thinking_status(status_message):
                 response = service.chat(user_id, chat_id, content)
     except Exception as exc:
         _fail(f"Chat failed: {exc}")
@@ -315,14 +319,15 @@ def _build_safety_review_service(*, interactive_approval: bool) -> SafetyReviewS
 
 
 def _prompt_cli_approval(request: ApprovalRequest) -> ApprovalDecision:
-    table = Table(title="Safety approval required", box=box.ROUNDED, border_style=BRAND_BORDER)
-    table.add_column("Field", style="bright_cyan")
-    table.add_column("Value", style="white")
-    table.add_row("Risk", request.finding.message)
-    table.add_row("Tool", request.tool_name)
-    table.add_row("Parameters", json.dumps(request.parameter_summary, ensure_ascii=False, default=str))
-    console.print(table)
-    raw = typer.prompt("Approve this operation? [o]nce / [s]ession / [d]eny", default="d")
+    with _pause_active_thinking_status():
+        table = Table(title="Safety approval required", box=box.ROUNDED, border_style=BRAND_BORDER)
+        table.add_column("Field", style="bright_cyan")
+        table.add_column("Value", style="white")
+        table.add_row("Risk", request.finding.message)
+        table.add_row("Tool", request.tool_name)
+        table.add_row("Parameters", json.dumps(request.parameter_summary, ensure_ascii=False, default=str))
+        console.print(table)
+        raw = typer.prompt("Approve this operation? [o]nce / [s]ession / [d]eny", default="d")
     return _approval_decision_from_text(raw)
 
 
@@ -333,6 +338,94 @@ def _approval_decision_from_text(value: str) -> ApprovalDecision:
     if normalized in {"s", "session"}:
         return ApprovalDecision(scope="session")
     return ApprovalDecision(scope="deny")
+
+
+class _ThinkingStatus:
+    def __init__(self, status_message: str) -> None:
+        self.status_message = status_message
+        self.started_at = 0.0
+        self._stop = threading.Event()
+        self._paused = threading.Event()
+        self._status_context = None
+        self._status_handle = None
+        self._thread: threading.Thread | None = None
+
+    def __enter__(self):
+        self.started_at = time.perf_counter()
+        self._status_context = console.status(
+            _thinking_status_message(self.status_message, self.started_at),
+            spinner="dots",
+            spinner_style="cyan",
+        )
+        self._status_handle = self._status_context.__enter__()
+        _ACTIVE_THINKING_STATUSES.append(self)
+        self._thread = threading.Thread(target=self._refresh, daemon=True)
+        self._thread.start()
+        return self._status_handle
+
+    def __exit__(self, exc_type, exc, tb):
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1)
+        if self in _ACTIVE_THINKING_STATUSES:
+            _ACTIVE_THINKING_STATUSES.remove(self)
+        if self._status_context is not None:
+            return self._status_context.__exit__(exc_type, exc, tb)
+        return False
+
+    def pause(self) -> None:
+        self._paused.set()
+        if hasattr(self._status_handle, "stop"):
+            self._status_handle.stop()
+
+    def resume(self) -> None:
+        if hasattr(self._status_handle, "start"):
+            self._status_handle.start()
+        self._paused.clear()
+        self._update()
+
+    def _refresh(self) -> None:
+        while not self._stop.wait(THINKING_REFRESH_SECONDS):
+            if not self._paused.is_set():
+                self._update()
+
+    def _update(self) -> None:
+        if self._status_handle is not None:
+            self._status_handle.update(_thinking_status_message(self.status_message, self.started_at))
+
+
+def _thinking_status(status_message: str) -> _ThinkingStatus:
+    return _ThinkingStatus(status_message)
+
+
+@contextlib.contextmanager
+def _pause_active_thinking_status():
+    active = _ACTIVE_THINKING_STATUSES[-1] if _ACTIVE_THINKING_STATUSES else None
+    if active is not None:
+        active.pause()
+    try:
+        yield
+    finally:
+        if active is not None:
+            active.resume()
+
+
+def _thinking_status_message(status_message: str, started_at: float) -> str:
+    elapsed = _format_elapsed_seconds(time.perf_counter() - started_at)
+    if "{elapsed}" in status_message:
+        return status_message.format(elapsed=elapsed)
+    return f"{status_message} [bright_yellow]已思考 {elapsed}[/]"
+
+
+def _format_elapsed_seconds(seconds: float) -> str:
+    total_seconds = max(0, int(seconds))
+    minutes, remaining_seconds = divmod(total_seconds, 60)
+    if minutes == 0:
+        return f"{remaining_seconds}s"
+    hours, remaining_minutes = divmod(minutes, 60)
+    if hours == 0:
+        return f"{remaining_minutes}m {remaining_seconds:02d}s"
+    return f"{hours}h {remaining_minutes:02d}m {remaining_seconds:02d}s"
 
 
 def _render_splash(user_id: str, chat_id: str, debug: bool) -> None:

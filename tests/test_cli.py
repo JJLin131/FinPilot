@@ -90,6 +90,61 @@ def test_ask_json_hides_debug_by_default(monkeypatch):
     assert "tool_calls" not in result.output
 
 
+def test_thinking_status_message_includes_elapsed(monkeypatch):
+    ticks = iter([10.0, 72.5])
+    monkeypatch.setattr(cli.time, "perf_counter", lambda: next(ticks))
+
+    started_at = cli.time.perf_counter()
+    message = cli._thinking_status_message(cli.THINKING_TEXT, started_at)
+
+    assert "FinPilot is thinking" in message
+    assert "已思考 1m 02s" in message
+    assert "routing -> retrieving -> composing" in message
+
+
+def test_run_chat_shows_thinking_status_for_interactive_approval(monkeypatch):
+    fake = FakeService()
+    statuses = []
+
+    class FakeStatus:
+        def __init__(self, message: str, **kwargs) -> None:
+            self.message = message
+            self.kwargs = kwargs
+            self.updates: list[str] = []
+
+        def __enter__(self):
+            statuses.append(self)
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def update(self, message: str) -> None:
+            self.updates.append(message)
+
+    def fake_status(message: str, **kwargs):
+        return FakeStatus(message, **kwargs)
+
+    monkeypatch.setattr(cli, "service_factory", lambda: fake)
+    monkeypatch.setattr(cli.console, "status", fake_status)
+
+    response = cli._run_chat(
+        user_id="user-1",
+        chat_id="chat-1",
+        content="hello",
+        debug=False,
+        status_message=cli.THINKING_TEXT,
+        interactive_approval=True,
+    )
+
+    assert response.answer
+    assert fake.calls == [("user-1", "chat-1", "hello")]
+    assert statuses
+    assert "FinPilot is thinking" in statuses[0].message
+    assert "已思考" in statuses[0].message
+    assert statuses[0].kwargs["spinner"] == "dots"
+
+
 def test_chat_handles_slash_commands_and_message(monkeypatch, tmp_path):
     fake = FakeService()
     prompts = iter(["/debug on", "hello", "/new chat-2", "/exit"])
