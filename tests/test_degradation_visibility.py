@@ -57,7 +57,11 @@ class FakeRagService:
 
 
 def test_tool_registry_includes_rag_degradation_issues():
-    invocation = ToolRegistry(FakeRagService()).invoke(_state(), "search_finance_knowledge")
+    invocation = ToolRegistry(FakeRagService()).invoke(
+        _state(),
+        "search_finance_knowledge",
+        query="宸ヨ祫鍙戞斁瀹℃壒瑙勫垯",
+    )
 
     assert invocation.status == "SUCCEEDED"
     assert invocation.output["documents"][0]["document_id"] == "doc-1"

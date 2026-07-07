@@ -12,20 +12,27 @@ from finpilot.observability.langfuse_support import score_trace
 from finpilot.observability.tracing import setup_tracing
 from finpilot.rag.service import RagKnowledgeService
 from finpilot.reranker import RemoteReranker
+from finpilot.safety.service import SafetyReviewService
 
 
 class FinPilotService:
-    def __init__(self, audit_store: AuditStore | None = None, memory_manager: MemoryManager | None = None):
+    def __init__(
+        self,
+        audit_store: AuditStore | None = None,
+        memory_manager: MemoryManager | None = None,
+        safety: SafetyReviewService | None = None,
+    ):
         setup_tracing()
         setup_langfuse()
         self.audit_store = audit_store or build_audit_store()
         self.memory_manager = memory_manager or MemoryManager()
+        self.safety = safety or SafetyReviewService()
         self.rag_service = RagKnowledgeService(reranker=RemoteReranker())
         if settings.rag_bootstrap_on_startup:
             self.rag_service.bootstrap_resources()
-        self.tools = ToolRegistry(self.rag_service)
+        self.tools = ToolRegistry(self.rag_service, safety=self.safety)
         self.router = IntentRouter()
-        self.graph = FinPilotGraph(self.router, self.tools, self.audit_store, self.memory_manager)
+        self.graph = FinPilotGraph(self.router, self.tools, self.audit_store, self.memory_manager, safety=self.safety)
 
     def chat(self, user_id: str, chat_id: str, content: str) -> AgentChatResponse:
         response = self.graph.run(user_id, chat_id, content)

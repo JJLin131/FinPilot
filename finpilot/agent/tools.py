@@ -4,8 +4,19 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
+
+from finpilot.issues import issue_from_safety_finding
 from finpilot.models import AgentEvidence, GraphState, ToolCard, ToolInvocation
 from finpilot.rag.service import RagKnowledgeService
+from finpilot.safety.service import SafetyReviewService
+
+
+class SearchFinanceKnowledgeArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: StrictStr = Field(min_length=1, max_length=1000)
+    limit: StrictInt = Field(default=3, ge=1, le=5)
 
 
 @dataclass
@@ -21,6 +32,7 @@ class ToolSpec:
     description: str
     when_to_use: str
     arguments: dict[str, str]
+    args_model: type[BaseModel] | None
     executor: Callable[[GraphState, dict[str, Any]], dict[str, Any]]
 
     def card(self) -> ToolCard:
@@ -33,8 +45,9 @@ class ToolSpec:
 
 
 class ToolRegistry:
-    def __init__(self, rag_service: RagKnowledgeService):
+    def __init__(self, rag_service: RagKnowledgeService, safety: SafetyReviewService | None = None):
         self.rag_service = rag_service
+        self.safety = safety or SafetyReviewService()
         self._tools: dict[str, ToolSpec] = {}
         self.register(
             ToolSpec(
@@ -42,6 +55,7 @@ class ToolRegistry:
                 description="Search the finance knowledge base and return relevant rule snippets.",
                 when_to_use="Use when the answer needs finance rules, policies, timing, approval, or compliance evidence.",
                 arguments={"query": "string", "limit": "integer, optional"},
+                args_model=SearchFinanceKnowledgeArgs,
                 executor=self._search_finance_knowledge,
             )
         )
@@ -61,14 +75,20 @@ class ToolRegistry:
             status = "FAILED"
             output = {"error": f"Unsupported tool: {tool_name}"}
         else:
-            try:
-                output = spec.executor(state, parameters)
-                status = "SUCCEEDED"
-            except Exception as exc:
-                status = "FAILED"
-                output = {"error": str(exc)}
+            review = self.safety.review_tool_call(state, spec, parameters, reason)
+            parameters = review.sanitized_payload or parameters
+            if review.action != "ALLOW":
+                status = "BLOCKED"
+                output = self._safety_output("Tool call blocked by safety policy.", review)
+            else:
+                try:
+                    output = spec.executor(state, parameters)
+                    status = "SUCCEEDED"
+                except Exception as exc:
+                    status = "FAILED"
+                    output = {"error": str(exc)}
         duration_ms = int((time.perf_counter() - started) * 1000)
-        return ToolInvocation(
+        invocation = ToolInvocation(
             tool_name=tool_name,
             parameters=parameters,
             status=status,
@@ -78,6 +98,16 @@ class ToolRegistry:
             reason=reason,
             observation_summary=self._summarize(tool_name, status, output),
         )
+        if status == "SUCCEEDED":
+            result_review = self.safety.review_tool_result(state, invocation)
+            if result_review.action == "REDACT":
+                invocation.output = result_review.sanitized_payload or {}
+                invocation.observation_summary = self._summarize(tool_name, status, invocation.output)
+                invocation.output.setdefault("issues", []).extend(
+                    issue_from_safety_finding(finding).model_dump(mode="json")
+                    for finding in result_review.findings
+                )
+        return invocation
 
     def _search_finance_knowledge(self, state: GraphState, parameters: dict[str, Any]) -> dict[str, Any]:
         query = str(parameters.get("query") or state.user_message)
@@ -96,6 +126,8 @@ class ToolRegistry:
         return []
 
     def _summarize(self, tool_name: str, status: str, output: dict[str, Any]) -> str:
+        if status == "BLOCKED":
+            return str(output.get("error") or f"{tool_name} blocked")
         if status == "FAILED":
             return str(output.get("error") or f"{tool_name} failed")
         documents = output.get("documents")
@@ -105,4 +137,14 @@ class ToolRegistry:
             top = documents[0]
             return f"retrieved {len(documents)} documents; top_document={top.get('document_id')}"
         return f"{tool_name} succeeded"
+
+    def _safety_output(self, message: str, review) -> dict[str, Any]:
+        return {
+            "error": message,
+            "safety": review.model_dump(mode="json"),
+            "issues": [
+                issue_from_safety_finding(finding).model_dump(mode="json")
+                for finding in review.findings
+            ],
+        }
 

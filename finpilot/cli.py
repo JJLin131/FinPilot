@@ -37,6 +37,8 @@ from finpilot.memory.stores import AgentChatMemoryStore
 from finpilot.models import AgentChatResponse
 from finpilot.readiness import check_runtime_readiness
 from finpilot.responses import prepare_chat_response
+from finpilot.safety.approval import ApprovalDecision, ApprovalRequest, ApprovalService
+from finpilot.safety.service import SafetyReviewService
 
 if TYPE_CHECKING:
     from finpilot.agent.service import FinPilotService
@@ -55,7 +57,7 @@ AUTHOR = "JJLin131"
 PROJECT_ADDRESS = "https://github.com/JJLin131/FinanceAgent"
 PACKAGE_NAME = "finpilot"
 THINKING_TEXT = "[bold bright_cyan]FinPilot is thinking[/] [dim]routing -> retrieving -> composing[/]"
-ServiceFactory = Callable[[], "FinPilotService"]
+ServiceFactory = Callable[..., "FinPilotService"]
 ChatStoreFactory = Callable[[], AgentChatMemoryStore]
 
 BRAND_BORDER = "bright_yellow"
@@ -75,14 +77,14 @@ knowledge_app = typer.Typer(help="Manage shared FinPilot knowledge resources.", 
 app.add_typer(knowledge_app, name="knowledge")
 
 
-def _default_service_factory() -> "FinPilotService":
+def _default_service_factory(*, interactive_approval: bool = False) -> "FinPilotService":
     _configure_cli_runtime()
     stderr = io.StringIO()
     with contextlib.redirect_stderr(stderr), warnings.catch_warnings():
         warnings.simplefilter("ignore")
         from finpilot.agent.service import FinPilotService
 
-        return FinPilotService()
+        return FinPilotService(safety=_build_safety_review_service(interactive_approval=interactive_approval))
 
 
 service_factory: ServiceFactory = _default_service_factory
@@ -171,6 +173,7 @@ def chat_command(
             content=raw,
             debug=debug_enabled,
             status_message=THINKING_TEXT,
+            interactive_approval=True,
         )
         _render_response(response, debug=debug_enabled)
 
@@ -282,11 +285,12 @@ def _run_chat(
     debug: bool,
     status_message: str,
     quiet: bool = False,
+    interactive_approval: bool = False,
 ) -> AgentChatResponse:
     service: FinPilotService | None = None
     try:
-        service = _create_service()
-        if quiet:
+        service = _create_service(interactive_approval=interactive_approval)
+        if quiet or interactive_approval:
             response = service.chat(user_id, chat_id, content)
         else:
             with console.status(status_message, spinner="dots", spinner_style="cyan"):
@@ -299,8 +303,36 @@ def _run_chat(
     return prepare_chat_response(response, debug_enabled=debug)
 
 
-def _create_service() -> FinPilotService:
+def _create_service(*, interactive_approval: bool = False) -> FinPilotService:
+    if service_factory is _default_service_factory:
+        return service_factory(interactive_approval=interactive_approval)
     return service_factory()
+
+
+def _build_safety_review_service(*, interactive_approval: bool) -> SafetyReviewService:
+    approval = ApprovalService(callback=_prompt_cli_approval if interactive_approval else None)
+    return SafetyReviewService(approval_service=approval, interactive_approval=interactive_approval)
+
+
+def _prompt_cli_approval(request: ApprovalRequest) -> ApprovalDecision:
+    table = Table(title="Safety approval required", box=box.ROUNDED, border_style=BRAND_BORDER)
+    table.add_column("Field", style="bright_cyan")
+    table.add_column("Value", style="white")
+    table.add_row("Risk", request.finding.message)
+    table.add_row("Tool", request.tool_name)
+    table.add_row("Parameters", json.dumps(request.parameter_summary, ensure_ascii=False, default=str))
+    console.print(table)
+    raw = typer.prompt("Approve this operation? [o]nce / [s]ession / [d]eny", default="d")
+    return _approval_decision_from_text(raw)
+
+
+def _approval_decision_from_text(value: str) -> ApprovalDecision:
+    normalized = value.strip().lower()
+    if normalized in {"o", "once"}:
+        return ApprovalDecision(scope="once")
+    if normalized in {"s", "session"}:
+        return ApprovalDecision(scope="session")
+    return ApprovalDecision(scope="deny")
 
 
 def _render_splash(user_id: str, chat_id: str, debug: bool) -> None:

@@ -11,19 +11,31 @@ from finpilot.agent.agents import FinanceQaSubAgent, TransferSubAgent
 from finpilot.agent.router import IntentRouter
 from finpilot.agent.tools import ToolRegistry
 from finpilot.intents import UNKNOWN_INTENT_ANSWER
-from finpilot.issues import dependency_degraded_issue, issue_from_tool_failure
+from finpilot.issues import dependency_degraded_issue, issue_from_safety_finding, issue_from_tool_failure
 from finpilot.memory.service import MemoryManager
 from finpilot.models import AgentChatResponse, GraphState, RouteDecision
 from finpilot.observability.audit import AuditStore
 from finpilot.observability.tracing import current_trace_id, span
+from finpilot.safety.service import SafetyReviewService
+
+
+SAFETY_BLOCKED_ANSWER = "请求被安全策略阻断，无法继续执行。"
 
 
 class FinPilotGraph:
-    def __init__(self, router: IntentRouter, tools: ToolRegistry, audit_store: AuditStore, memory_manager: MemoryManager):
+    def __init__(
+        self,
+        router: IntentRouter,
+        tools: ToolRegistry,
+        audit_store: AuditStore,
+        memory_manager: MemoryManager,
+        safety: SafetyReviewService | None = None,
+    ):
         self.router = router
         self.tools = tools
         self.audit_store = audit_store
         self.memory_manager = memory_manager
+        self.safety = safety or SafetyReviewService()
         self.query_agent = FinanceQaSubAgent()
         self.transfer_agent = TransferSubAgent()
         self.graph = self._build_graph()
@@ -60,6 +72,7 @@ class FinPilotGraph:
                 evidence=graph_state.evidence,
                 route=route,
                 issues=graph_state.issues,
+                safety_findings=graph_state.safety_findings,
                 route_debug={
                     "classifier_intent": graph_state.classifier_intent,
                     "embedding_top1": graph_state.embedding_top1,
@@ -72,6 +85,7 @@ class FinPilotGraph:
                     "evidence_sufficient": graph_state.evidence_sufficient,
                     "context_usage": graph_state.context_usage,
                     "context_compactions": graph_state.context_compactions,
+                    "safety_findings": [finding.model_dump(mode="json") for finding in graph_state.safety_findings],
                 },
                 retrieval_debug={
                     "retrieved_docs": [item.model_dump() for item in graph_state.retrieved_docs],
@@ -85,22 +99,43 @@ class FinPilotGraph:
 
     def _build_graph(self):
         builder = StateGraph(dict)
+        builder.add_node("input_safety_review", self._input_safety_review)
         builder.add_node("context_load", self._context_load)
         builder.add_node("intent_classify", self._intent_classify)
         builder.add_node("embedding_score", self._embedding_score)
         builder.add_node("route_decide", self._route_decide)
         builder.add_node("subagent", self._subagent)
         builder.add_node("answer_compose", self._answer_compose)
+        builder.add_node("response_safety_review", self._response_safety_review)
         builder.add_node("audit_persist", self._audit_persist)
-        builder.add_edge(START, "context_load")
+        builder.add_edge(START, "input_safety_review")
+        builder.add_conditional_edges(
+            "input_safety_review",
+            self._after_input_safety_review,
+            {"continue": "context_load", "blocked": "audit_persist"},
+        )
         builder.add_edge("context_load", "intent_classify")
         builder.add_edge("intent_classify", "embedding_score")
         builder.add_edge("embedding_score", "route_decide")
         builder.add_edge("route_decide", "subagent")
         builder.add_edge("subagent", "answer_compose")
-        builder.add_edge("answer_compose", "audit_persist")
+        builder.add_edge("answer_compose", "response_safety_review")
+        builder.add_edge("response_safety_review", "audit_persist")
         builder.add_edge("audit_persist", END)
         return builder.compile()
+
+    def _input_safety_review(self, state: dict[str, Any]) -> dict[str, Any]:
+        graph_state = GraphState.model_validate(state)
+        with self._timed_span(graph_state, "safety.input"):
+            result = self.safety.review_input(graph_state)
+            self._apply_safety_review(graph_state, result)
+            if result.action == "BLOCK":
+                graph_state.final_answer = SAFETY_BLOCKED_ANSWER
+            return graph_state.model_dump()
+
+    def _after_input_safety_review(self, state: dict[str, Any]) -> str:
+        graph_state = GraphState.model_validate(state)
+        return "blocked" if graph_state.final_answer == SAFETY_BLOCKED_ANSWER else "continue"
 
     def _context_load(self, state: dict[str, Any]) -> dict[str, Any]:
         graph_state = GraphState.model_validate(state)
@@ -200,6 +235,17 @@ class FinPilotGraph:
             graph_state.scores["faithfulness"] = 1.0 if graph_state.evidence else 0.4
             return graph_state.model_dump()
 
+    def _response_safety_review(self, state: dict[str, Any]) -> dict[str, Any]:
+        graph_state = GraphState.model_validate(state)
+        with self._timed_span(graph_state, "safety.response"):
+            result = self.safety.review_response(graph_state)
+            self._apply_safety_review(graph_state, result)
+            if result.action == "BLOCK":
+                graph_state.final_answer = SAFETY_BLOCKED_ANSWER
+            elif result.action == "REDACT" and isinstance(result.sanitized_payload, str):
+                graph_state.final_answer = result.sanitized_payload
+            return graph_state.model_dump()
+
     def _audit_persist(self, state: dict[str, Any]) -> dict[str, Any]:
         graph_state = GraphState.model_validate(state)
         with self._timed_span(graph_state, "audit.persist"):
@@ -241,6 +287,8 @@ class FinPilotGraph:
 
     def _response_status(self, state: GraphState) -> str:
         # 状态在图执行末端统一收口，避免中间节点把系统故障误标成 unsupported。
+        if any(issue.component == "safety" and issue.severity == "error" for issue in state.issues):
+            return "FAILED"
         if state.issues:
             if state.normalized_intent == "UNKNOWN":
                 return "FAILED"
@@ -256,6 +304,12 @@ class FinPilotGraph:
             if issue.severity == "error":
                 return issue.message
         return state.issues[0].message if state.issues and state.normalized_intent == "UNKNOWN" else ""
+
+    def _apply_safety_review(self, state: GraphState, result) -> None:
+        if not result.findings:
+            return
+        state.safety_findings.extend(result.findings)
+        state.issues.extend(issue_from_safety_finding(finding) for finding in result.findings)
 
     def _timed_span(self, state: GraphState, span_name: str):
         class TimedContext:

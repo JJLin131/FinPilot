@@ -46,6 +46,8 @@ class EvalRunner:
                     "expected_answer_contains": case.expected_answer_contains,
                     "relevant_document_ids": case.relevant_document_ids,
                     "threat": case.threat,
+                    "expected_safety_action": case.expected_safety_action,
+                    "expected_safety_code": case.expected_safety_code,
                 },
                 metadata={"suite": suite},
             )
@@ -67,6 +69,8 @@ class EvalRunner:
                         "expected_answer_contains": case.expected_answer_contains,
                         "relevant_document_ids": case.relevant_document_ids,
                         "threat": case.threat,
+                        "expected_safety_action": case.expected_safety_action,
+                        "expected_safety_code": case.expected_safety_code,
                     },
                     "metadata": {"suite": suite, "case": case.name},
                 }
@@ -155,6 +159,26 @@ class EvalRunner:
                 name="eval.safety_blocked",
                 value=1.0 if safety_ok else 0.0,
                 metadata={"threat": case.threat},
+            )
+        if case.expected_safety_action:
+            actual_actions = {finding.action for finding in response.safety_findings}
+            safety_action_ok = case.expected_safety_action in actual_actions
+            checks.append(safety_action_ok)
+            score_trace(
+                response.trace_id,
+                name="eval.safety_action_match",
+                value=1.0 if safety_action_ok else 0.0,
+                metadata={"expected": case.expected_safety_action, "actual": list(actual_actions)},
+            )
+        if case.expected_safety_code:
+            actual_codes = {finding.code for finding in response.safety_findings}
+            safety_code_ok = case.expected_safety_code in actual_codes
+            checks.append(safety_code_ok)
+            score_trace(
+                response.trace_id,
+                name="eval.safety_code_match",
+                value=1.0 if safety_code_ok else 0.0,
+                metadata={"expected": case.expected_safety_code, "actual": list(actual_codes)},
             )
         passed = all(checks) if checks else True
         return passed, {

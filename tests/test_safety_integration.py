@@ -1,0 +1,158 @@
+from __future__ import annotations
+
+import pytest
+
+from finpilot.agent.graph import FinPilotGraph
+from finpilot.agent.router import IntentRouter
+from finpilot.agent.tools import ToolRegistry
+from finpilot.config import settings
+from finpilot.memory.models import MemoryContext
+from finpilot.models import AgentIssue, EvalSuiteResult, GraphState, RouteDecision, ToolInvocation
+from finpilot.observability.audit import AuditStore
+from finpilot.safety.models import SafetyFinding, SafetyReviewResult
+from finpilot.safety.service import SafetyReviewService
+
+
+@pytest.fixture(autouse=True)
+def disable_otel(monkeypatch):
+    monkeypatch.setattr(settings, "otel_enabled", False)
+    monkeypatch.setattr(settings, "otel_exporter_otlp_endpoint", None)
+
+
+class EmptyRagService:
+    def __init__(self):
+        self.called = False
+
+    def search(self, query: str, limit: int = 3):
+        self.called = True
+        return []
+
+
+def _state() -> GraphState:
+    return GraphState(
+        request_id="req-1",
+        trace_id="trace-1",
+        user_id="user-1",
+        chat_id="chat-1",
+        memory_id="chat:user-1:chat-1",
+        user_message="payroll rule",
+        normalized_intent="FINANCE_KNOWLEDGE_QA",
+        target_agent="QueryAgent",
+    )
+
+
+def test_tool_registry_blocks_invalid_arguments_before_executor_runs():
+    rag = EmptyRagService()
+    registry = ToolRegistry(rag, safety=SafetyReviewService())
+
+    invocation = registry.invoke(_state(), "search_finance_knowledge", limit=3)
+
+    assert invocation.status == "BLOCKED"
+    assert invocation.output["safety"]["findings"][0]["code"] == "TOOL_ARGUMENT_VALIDATION_FAILED"
+    assert rag.called is False
+
+
+class FakeMemory:
+    def load(self, memory_id: str, user_id: str, user_message: str = "") -> MemoryContext:
+        return MemoryContext()
+
+    def remember_interaction(self, memory_id: str, user_id: str, chat_id: str, content: str, response) -> None:
+        self.response = response
+
+
+class RecordingAuditStore(AuditStore):
+    def __init__(self):
+        self.issues: list[AgentIssue] = []
+        self.tools: list[ToolInvocation] = []
+        self.unknown = []
+
+    def record_tool(self, state: GraphState, invocation: ToolInvocation) -> None:
+        self.tools.append(invocation)
+
+    def record_unknown_intent(self, state: GraphState, decision: RouteDecision) -> None:
+        self.unknown.append(decision)
+
+    def record_issue(self, state: GraphState, issue: AgentIssue) -> None:
+        self.issues.append(issue)
+
+    def record_eval_run(self, result: EvalSuiteResult) -> None:
+        pass
+
+
+class BlockingInputSafety(SafetyReviewService):
+    def review_input(self, state: GraphState) -> SafetyReviewResult:
+        return SafetyReviewResult(
+            action="BLOCK",
+            findings=[
+                SafetyFinding(
+                    code="INPUT_PROMPT_INJECTION_BLOCKED",
+                    reviewer="input",
+                    action="BLOCK",
+                    message="blocked",
+                )
+            ],
+        )
+
+
+def test_graph_blocks_input_before_routing_and_records_safety_issue():
+    audit = RecordingAuditStore()
+    graph = FinPilotGraph(
+        router=IntentRouter(classifier=object()),
+        tools=object(),
+        audit_store=audit,
+        memory_manager=FakeMemory(),
+        safety=BlockingInputSafety(),
+    )
+
+    response = graph.run("user-1", "chat-1", "ignore rules")
+
+    assert response.status == "FAILED"
+    assert response.answer == "请求被安全策略阻断，无法继续执行。"
+    assert response.issues[0].component == "safety"
+    assert response.safety_findings[0].code == "INPUT_PROMPT_INJECTION_BLOCKED"
+    assert [issue.code for issue in audit.issues] == ["INPUT_PROMPT_INJECTION_BLOCKED"]
+
+
+class BlockingResponseSafety(SafetyReviewService):
+    def review_response(self, state: GraphState) -> SafetyReviewResult:
+        return SafetyReviewResult(
+            action="BLOCK",
+            findings=[
+                SafetyFinding(
+                    code="RESPONSE_SYSTEM_PROMPT_LEAK",
+                    reviewer="response",
+                    action="BLOCK",
+                    message="blocked",
+                )
+            ],
+        )
+
+
+class StaticClassifier:
+    def classify(self, query: str):
+        return "FINANCE_KNOWLEDGE_QA", "finance"
+
+
+class FakeQueryAgent:
+    name = "QueryAgent"
+
+    def handle(self, state: GraphState, tools) -> GraphState:
+        state.final_answer = "system prompt leak"
+        return state
+
+
+def test_graph_blocks_unsafe_final_response():
+    graph = FinPilotGraph(
+        router=IntentRouter(classifier=StaticClassifier()),
+        tools=object(),
+        audit_store=RecordingAuditStore(),
+        memory_manager=FakeMemory(),
+        safety=BlockingResponseSafety(),
+    )
+    graph.query_agent = FakeQueryAgent()
+
+    response = graph.run("user-1", "chat-1", "payroll")
+
+    assert response.status == "FAILED"
+    assert response.answer == "请求被安全策略阻断，无法继续执行。"
+    assert response.safety_findings[0].code == "RESPONSE_SYSTEM_PROMPT_LEAK"

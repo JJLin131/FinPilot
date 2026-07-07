@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from finpilot.safety.models import SafetyFinding
+
 
 class FinPilotChatRequest(BaseModel):
     user_id: str = Field(min_length=1)
@@ -46,7 +48,7 @@ class RouteDecision(BaseModel):
 class ToolInvocation(BaseModel):
     tool_name: str
     parameters: dict[str, Any] = Field(default_factory=dict)
-    status: Literal["SUCCEEDED", "FAILED"] = "SUCCEEDED"
+    status: Literal["SUCCEEDED", "FAILED", "BLOCKED"] = "SUCCEEDED"
     duration_ms: int = 0
     output: dict[str, Any] = Field(default_factory=dict)
     step_index: int | None = None
@@ -101,7 +103,7 @@ class AgentDecision(BaseModel):
 
 class ToolObservation(BaseModel):
     tool_name: str
-    status: Literal["SUCCEEDED", "FAILED"]
+    status: Literal["SUCCEEDED", "FAILED", "BLOCKED"]
     summary: str
     output: dict[str, Any] = Field(default_factory=dict)
 
@@ -130,6 +132,7 @@ class AgentChatResponse(BaseModel):
     evidence: list[AgentEvidence] = Field(default_factory=list)
     route: RouteDecision
     issues: list[AgentIssue] = Field(default_factory=list)
+    safety_findings: list[SafetyFinding] = Field(default_factory=list)
     route_debug: dict[str, Any] | None = None
     retrieval_debug: dict[str, Any] | None = None
     tool_calls: list[ToolInvocation] | None = None
@@ -154,6 +157,8 @@ class EvalCase(BaseModel):
     expected_answer_contains: str | None = None
     relevant_document_ids: list[str] = Field(default_factory=list)
     threat: str | None = None
+    expected_safety_action: str | None = None
+    expected_safety_code: str | None = None
 
 
 class EvalSuiteResult(BaseModel):
@@ -184,6 +189,7 @@ class GraphState(BaseModel):
     margin_score: float = 0.0
     agreement_score: float = 0.0
     issues: list[AgentIssue] = Field(default_factory=list)
+    safety_findings: list[SafetyFinding] = Field(default_factory=list)
     retrieved_docs: list[RagMatch] = Field(default_factory=list)
     reranked_docs: list[RagMatch] = Field(default_factory=list)
     tool_invocations: list[ToolInvocation] = Field(default_factory=list)

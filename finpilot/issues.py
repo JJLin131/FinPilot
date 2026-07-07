@@ -5,6 +5,7 @@ import json
 import httpx
 
 from finpilot.models import AgentIssue, ToolInvocation
+from finpilot.safety.models import SafetyFinding
 
 ROUTING_COMPONENT = "routing_llm"
 
@@ -49,6 +50,17 @@ def issue_from_tool_failure(invocation: ToolInvocation) -> AgentIssue:
         severity="error",
         retryable=True,
         detail=_truncate(str(invocation.output.get("error") or invocation.observation_summary or "tool failed")),
+    )
+
+
+def issue_from_safety_finding(finding: SafetyFinding) -> AgentIssue:
+    return AgentIssue(
+        code=finding.code,
+        component="safety",
+        message=finding.message,
+        severity="error" if finding.action in {"BLOCK", "ESCALATE", "REQUIRE_APPROVAL"} else "warning",
+        retryable=finding.action in {"ESCALATE", "REQUIRE_APPROVAL"},
+        detail=json.dumps(finding.detail, ensure_ascii=False) if finding.detail else None,
     )
 
 

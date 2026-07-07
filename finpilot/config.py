@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     routing_llm_enabled: bool = True
     routing_provider: str = "deepseek"
     routing_model_name: str = "deepseek-v4-pro"
+    safety_response_llm_enabled: bool = False
+    safety_response_provider: str = "deepseek"
+    safety_response_model_name: str = "deepseek-v4-pro"
 
     audit_backend: str = "mysql"
     audit_dir: Path = Field(default=Path("./data/python-audit"))
