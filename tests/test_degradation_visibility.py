@@ -98,6 +98,28 @@ def test_agent_runtime_merges_tool_output_issues_into_graph_state():
     assert state.evidence[0].summary["document_id"] == "doc-1"
 
 
+def test_agent_runtime_merges_tool_safety_findings_into_graph_state():
+    state = _state()
+    output = {
+        "safety": {
+            "findings": [
+                {
+                    "code": "TOOL_OPERATION_REQUIRES_APPROVAL",
+                    "reviewer": "operation_risk",
+                    "action": "BLOCK",
+                    "message": "approval required",
+                    "severity": "warning",
+                    "detail": {"tool_name": "transfer_mock_funds"},
+                }
+            ]
+        }
+    }
+
+    AgentRuntime()._merge_tool_output(state, output)
+
+    assert [finding.code for finding in state.safety_findings] == ["TOOL_OPERATION_REQUIRES_APPROVAL"]
+
+
 class FailingAnswerClient:
     def generate(self, prompt: str, *, model_name: str | None = None, system_prompt: str | None = None) -> str:
         raise RuntimeError("answer model down")

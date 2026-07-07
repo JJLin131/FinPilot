@@ -52,7 +52,18 @@ class SafetyReviewService:
         if risk_result.action == "REQUIRE_APPROVAL":
             if not self.interactive_approval or not risk_result.findings:
                 return self._with_action(risk_result, "BLOCK")
-            approval = self.approval_service.resolve(risk_result.findings[0], tool_name=spec.name, parameters=validated)
+            approval = self.approval_service.resolve(risk_result.findings[0], tool_name=spec.name, parameters=validated, state=state)
+            state.safety_approval_decisions.append(
+                {
+                    "tool_name": spec.name,
+                    "finding_code": risk_result.findings[0].code,
+                    "approved": approval.approved,
+                    "scope": approval.scope,
+                    "reused": approval.reused,
+                    "approval_key": approval.approval_key,
+                    "expires_at": approval.expires_at.isoformat() if approval.expires_at else None,
+                }
+            )
             if not approval.approved:
                 return self._with_action(risk_result, "BLOCK")
         elif risk_result.action == "ESCALATE":

@@ -25,6 +25,7 @@ from finpilot.models import (
     SubAgentContext,
     ToolObservation,
 )
+from finpilot.safety.models import SafetyFinding
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +174,9 @@ class AgentRuntime:
     def _merge_tool_output(self, state: GraphState, output: dict) -> None:
         for item in output.get("issues", []):
             state.issues.append(AgentIssue.model_validate(item))
+        safety_payload = output.get("safety", {})
+        for item in safety_payload.get("findings", []) if isinstance(safety_payload, dict) else []:
+            state.safety_findings.append(SafetyFinding.model_validate(item))
         documents = output.get("documents", [])
         for item in documents:
             match = RagMatch(**item)

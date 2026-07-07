@@ -32,7 +32,7 @@ Knowledge is shared across all users and managed by administrators. User isolati
   - Chroma on `8000`
   - reranker on `8081`
 
-Copy `.env.example` to `.env` and fill in `DEEPSEEK_API_KEY`. The example values for MySQL, Langfuse, MinIO, Redis, and ClickHouse are local-only defaults. When `APP_ENV` is not `local`, FinPilot rejects missing DeepSeek credentials and known local secret defaults at startup.
+Copy `.env.example` to `.env` and fill in `DEEPSEEK_API_KEY`. The example values for MySQL, Langfuse, MinIO, Redis, and ClickHouse are local-only defaults. When `APP_ENV` is not `local`, FinPilot rejects missing DeepSeek credentials and known local secret defaults at startup. The root `compose.yaml` also uses required environment variable expansion, so missing secrets fail during `docker compose config` instead of becoming blank runtime values.
 
 ## Local Development
 
@@ -62,6 +62,8 @@ curl http://localhost:8099/readyz
 ```
 
 `/healthz` only reports process liveness. `/readyz` reports lightweight runtime readiness for MySQL, BM25, Chroma, embedding, reranker, and LLM configuration without running expensive model inference.
+
+If vector retrieval or reranking is explicitly disabled through `VECTOR_ENABLED=false` or `RERANKER_ENABLED=false`, `/readyz` reports that dependency as `ok` with `detail=disabled`. Enabled but unreachable dependencies are reported as `degraded` or `failed`.
 
 ## CLI
 
@@ -115,6 +117,12 @@ Optional local AI lab profile:
 docker compose --profile ai-lab up --build
 ```
 
+Validate Compose configuration before starting services:
+
+```powershell
+docker compose --env-file .env config --quiet
+```
+
 ## Shared Knowledge Ingest
 
 Single document ingest:
@@ -159,6 +167,21 @@ curl -X POST http://localhost:8099/api/finance/chat `
 
 Without `X-Debug-Trace: true`, route debug, retrieval debug, and tool calls are hidden from the response.
 
+Safety finding details are also scrubbed unless `X-Debug-Trace: true` is set. The public response keeps the finding code, reviewer, action, message, and severity, but removes internal `detail` payloads.
+
+## Safety Review
+
+FinPilot runs safety review at four points:
+
+- input review before routing
+- tool argument and operation risk review before execution
+- tool result review before observations are merged
+- final answer review before persistence
+
+High-risk tool operations require approval when interactive approval is enabled. Session approval reuse is scoped to `user_id + chat_id + tool + finding code + parameter fingerprint` and expires after a short TTL; approval decisions and safety findings are recorded through the audit store.
+
+`transfer_mock_funds` is a local demonstration tool for approval testing only. It is registered in the tool registry so direct safety tests can invoke it, but it is not exposed to the normal Finance QA agent unless `ENABLE_DEMO_RISK_TOOLS=true`.
+
 ## Database
 
 Runtime code creates the default database when the configured MySQL user has permission, then creates the tables it directly depends on:
@@ -171,10 +194,21 @@ Existing databases with older nullable `tenant_id` columns remain compatible; Fi
 
 ## Evaluation Status
 
-Evaluation runner code is present under `finpilot/evals`, with smoke JSONL suites under `evals/datasets`.
+Evaluation runner code is present under `finpilot/evals`, with smoke JSONL suites under `evals/datasets`. The smoke datasets cover routing, tool use, RAG retrieval, grounded answer, and safety expectations.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\test_eval_datasets.py -q
 ```
 
+Safety eval cases should use explicit `expected_safety_action` and `expected_safety_code`. `threat` is metadata for the attack class, not a substitute for expected behavior. RAG retrieval evals should point to stable resource document IDs generated from the bundled Markdown filenames.
+
 `promptfoo.yaml` remains deferred until the first evaluation datasets are stable enough to act as release gates.
+
+## Troubleshooting
+
+- Missing DeepSeek key: check all DeepSeek-backed features, including routing, RAG curation, and safety response review.
+- `/readyz` reports BM25 degraded: bootstrap knowledge resources or confirm `BM25_INDEX_PATH`.
+- Chroma or embedding degraded: either start the AI lab profile or set `VECTOR_ENABLED=false` for local BM25-only testing.
+- Reranker degraded: start the reranker service or set `RERANKER_ENABLED=false`.
+- Safety blocks a request: inspect `issues`, `safety_findings`, and audit records; enable `X-Debug-Trace: true` only for trusted diagnostics.
+- Eval failure: run `tests/test_eval_datasets.py` first to validate JSONL shape, then inspect suite-specific expected intent, tool, safety, and document ID fields.

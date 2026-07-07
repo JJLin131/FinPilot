@@ -152,13 +152,13 @@ class EvalRunner:
                 metadata={"expected_docs": case.relevant_document_ids, "actual_docs": list(actual)},
             )
         if case.threat:
-            safety_ok = response.status == "UNSUPPORTED" and response.route.normalized_intent == "UNKNOWN" and not response.issues
+            safety_ok = bool(response.safety_findings) or any(issue.component == "safety" for issue in response.issues)
             checks.append(safety_ok)
             score_trace(
                 response.trace_id,
-                name="eval.safety_blocked",
+                name="eval.safety_signal",
                 value=1.0 if safety_ok else 0.0,
-                metadata={"threat": case.threat},
+                metadata={"threat": case.threat, "status": response.status},
             )
         if case.expected_safety_action:
             actual_actions = {finding.action for finding in response.safety_findings}
@@ -187,6 +187,7 @@ class EvalRunner:
             "route": response.route.normalized_intent,
             "status": response.status,
             "issues": [issue.code for issue in response.issues],
+            "safety_findings": [finding.code for finding in response.safety_findings],
             "answer": response.answer,
         }
 
@@ -203,8 +204,14 @@ class EvalRunner:
             )
             return {
                 "actual_intent": response.route.normalized_intent,
+                "status": response.status,
                 "answer": response.answer,
                 "tool_calls": [tool.tool_name for tool in response.tool_calls or []],
+                "evidence_document_ids": [
+                    entry.summary.get("document_id") for entry in response.evidence if "document_id" in entry.summary
+                ],
+                "safety_actions": [finding.action for finding in response.safety_findings],
+                "safety_codes": [finding.code for finding in response.safety_findings],
                 "trace_id": response.trace_id,
             }
 
@@ -221,13 +228,37 @@ class EvalRunner:
             score = 1.0 if not expected_tool or expected_tool in tools else 0.0
             return {"name": "tool_match", "value": score, "comment": f"expected={expected_tool}, actual={tools}"}
 
+        def retrieval_evaluator(item, output):
+            expected_docs = item["expected_output"].get("relevant_document_ids") or []
+            actual_docs = set(output.get("evidence_document_ids", []))
+            score = 1.0 if not expected_docs or any(doc_id in actual_docs for doc_id in expected_docs) else 0.0
+            return {"name": "retrieval_hit", "value": score, "comment": f"expected={expected_docs}, actual={list(actual_docs)}"}
+
+        def answer_evaluator(item, output):
+            expected_text = item["expected_output"].get("expected_answer_contains")
+            answer = output.get("answer") or ""
+            score = 1.0 if not expected_text or expected_text in answer else 0.0
+            return {"name": "answer_contains", "value": score, "comment": f"expected={expected_text}"}
+
+        def safety_action_evaluator(item, output):
+            expected_action = item["expected_output"].get("expected_safety_action")
+            actions = output.get("safety_actions", [])
+            score = 1.0 if not expected_action or expected_action in actions else 0.0
+            return {"name": "safety_action_match", "value": score, "comment": f"expected={expected_action}, actual={actions}"}
+
+        def safety_code_evaluator(item, output):
+            expected_code = item["expected_output"].get("expected_safety_code")
+            codes = output.get("safety_codes", [])
+            score = 1.0 if not expected_code or expected_code in codes else 0.0
+            return {"name": "safety_code_match", "value": score, "comment": f"expected={expected_code}, actual={codes}"}
+
         run_experiment(
             suite,
             run_name=build_run_name(suite),
             description=f"Automated evaluation run for suite {suite}",
             cases=cases,
             task=task,
-            evaluators=[evaluator, tool_evaluator],
+            evaluators=[evaluator, tool_evaluator, retrieval_evaluator, answer_evaluator, safety_action_evaluator, safety_code_evaluator],
             metadata={"suite": suite, "kind": "regression"},
         )
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -8,12 +9,12 @@ from finpilot.models import RagMatch
 
 
 class KnowledgeDocumentRequest(BaseModel):
-    document_id: str
-    domain: str = "FINANCE"
-    title: str
-    source: str
-    content: str
-    tags: list[str] = Field(default_factory=list)
+    document_id: str = Field(min_length=1, max_length=191, pattern=r"^[A-Za-z0-9_.:@-]+$")
+    domain: Literal["FINANCE"] = "FINANCE"
+    title: str = Field(min_length=1, max_length=256)
+    source: str = Field(min_length=1, max_length=500)
+    content: str = Field(min_length=1, max_length=200000)
+    tags: list[str] = Field(default_factory=list, max_length=32)
     valid_from: date | None = None
     valid_to: date | None = None
 

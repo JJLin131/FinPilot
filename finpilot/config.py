@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     safety_response_llm_enabled: bool = False
     safety_response_provider: str = "deepseek"
     safety_response_model_name: str = "deepseek-v4-pro"
+    enable_demo_risk_tools: bool = False
+    tool_risk_policies: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     audit_backend: str = "mysql"
     audit_dir: Path = Field(default=Path("./data/python-audit"))
@@ -99,8 +101,21 @@ class Settings(BaseSettings):
         if self.app_env.lower() == "local":
             return self
         errors = []
-        if self.ai_provider.lower() == "deepseek" and not (self.deepseek_api_key or "").strip():
-            errors.append("DEEPSEEK_API_KEY is required when APP_ENV is not local.")
+        deepseek_features = []
+        if self.ai_provider.lower() == "deepseek":
+            deepseek_features.append("ai_provider")
+        if self.routing_llm_enabled and self.routing_provider.lower() == "deepseek":
+            deepseek_features.append("routing_provider")
+        if self.rag_curation_enabled and self.rag_curation_provider.lower() == "deepseek":
+            deepseek_features.append("rag_curation_provider")
+        if self.safety_response_llm_enabled and self.safety_response_provider.lower() == "deepseek":
+            deepseek_features.append("safety_response_provider")
+        if deepseek_features and not (self.deepseek_api_key or "").strip():
+            errors.append(
+                "DEEPSEEK_API_KEY is required when APP_ENV is not local for: "
+                + ", ".join(deepseek_features)
+                + "."
+            )
         if self.mysql_user == "root" and self.mysql_password == "123456":
             errors.append("MYSQL_PASSWORD must not use the root/123456 development default when APP_ENV is not local.")
         if self.langfuse_enabled and self.langfuse_secret_key in {None, "", "sk-lf-local"}:

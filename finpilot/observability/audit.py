@@ -9,6 +9,8 @@ from typing import Any
 from finpilot.config import settings
 from finpilot.models import AgentIssue, EvalSuiteResult, GraphState, RouteDecision, ToolInvocation
 from finpilot.mysql import connect_runtime_mysql
+from finpilot.safety.models import SafetyFinding
+from finpilot.safety.redaction import redact_value
 
 
 class AuditStore(ABC):
@@ -28,6 +30,12 @@ class AuditStore(ABC):
     def record_eval_run(self, result: EvalSuiteResult) -> None:
         raise NotImplementedError
 
+    def record_safety_finding(self, state: GraphState, finding: SafetyFinding) -> None:
+        pass
+
+    def record_approval_decision(self, state: GraphState, decision: dict[str, Any]) -> None:
+        pass
+
 
 class FileAuditStore(AuditStore):
     def __init__(self, root: Path):
@@ -43,7 +51,7 @@ class FileAuditStore(AuditStore):
                 "user_id": state.user_id,
                 "domain": "FINANCE",
                 "tool_name": invocation.tool_name,
-                "parameter_summary": invocation.parameters,
+                "parameter_summary": redact_value(invocation.parameters),
                 "status": invocation.status,
                 "duration_ms": invocation.duration_ms,
             },
@@ -92,6 +100,36 @@ class FileAuditStore(AuditStore):
 
     def record_eval_run(self, result: EvalSuiteResult) -> None:
         self._append("agent_eval_run.jsonl", result.model_dump())
+
+    def record_safety_finding(self, state: GraphState, finding: SafetyFinding) -> None:
+        self._append(
+            "agent_safety_finding_audit.jsonl",
+            {
+                "request_id": state.request_id,
+                "trace_id": state.trace_id,
+                "user_id": state.user_id,
+                "domain": "FINANCE",
+                "code": finding.code,
+                "reviewer": finding.reviewer,
+                "action": finding.action,
+                "message": finding.message,
+                "severity": finding.severity,
+                "detail": redact_value(finding.detail),
+                "route_intent": state.normalized_intent,
+            },
+        )
+
+    def record_approval_decision(self, state: GraphState, decision: dict[str, Any]) -> None:
+        self._append(
+            "agent_safety_approval_audit.jsonl",
+            {
+                "request_id": state.request_id,
+                "trace_id": state.trace_id,
+                "user_id": state.user_id,
+                "domain": "FINANCE",
+                **redact_value(decision),
+            },
+        )
 
     def _append(self, file_name: str, payload: dict[str, Any]) -> None:
         line = {
@@ -209,6 +247,50 @@ class MySqlAuditStore(AuditStore):
                     )
                     """
                 )
+                cursor.execute(
+                    """
+                    create table if not exists agent_safety_finding_audit (
+                        id bigint not null auto_increment primary key,
+                        request_id varchar(64) not null,
+                        trace_id varchar(64) null,
+                        user_id varchar(64) not null,
+                        domain varchar(32) not null,
+                        code varchar(96) not null,
+                        reviewer varchar(96) not null,
+                        action varchar(32) not null,
+                        message text not null,
+                        severity varchar(32) not null,
+                        detail_json longtext null,
+                        route_intent varchar(64) null,
+                        created_at datetime(6) not null,
+                        key idx_agent_safety_finding_created (created_at),
+                        key idx_agent_safety_finding_request (request_id),
+                        key idx_agent_safety_finding_code (code)
+                    )
+                    """
+                )
+                cursor.execute(
+                    """
+                    create table if not exists agent_safety_approval_audit (
+                        id bigint not null auto_increment primary key,
+                        request_id varchar(64) not null,
+                        trace_id varchar(64) null,
+                        user_id varchar(64) not null,
+                        domain varchar(32) not null,
+                        tool_name varchar(128) not null,
+                        finding_code varchar(96) not null,
+                        approved tinyint(1) not null,
+                        scope varchar(32) not null,
+                        reused tinyint(1) not null,
+                        approval_key varchar(64) null,
+                        expires_at varchar(64) null,
+                        created_at datetime(6) not null,
+                        key idx_agent_safety_approval_created (created_at),
+                        key idx_agent_safety_approval_request (request_id),
+                        key idx_agent_safety_approval_tool (tool_name)
+                    )
+                    """
+                )
 
     def record_tool(self, state: GraphState, invocation: ToolInvocation) -> None:
         with self._connect() as connection:
@@ -224,7 +306,7 @@ class MySqlAuditStore(AuditStore):
                         state.user_id,
                         "FINANCE",
                         invocation.tool_name,
-                        json.dumps(invocation.parameters, ensure_ascii=False),
+                        json.dumps(redact_value(invocation.parameters), ensure_ascii=False),
                         invocation.status,
                         invocation.duration_ms,
                     ),
@@ -305,6 +387,56 @@ class MySqlAuditStore(AuditStore):
                     )
                 except Exception:
                     return
+
+    def record_safety_finding(self, state: GraphState, finding: SafetyFinding) -> None:
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    insert into agent_safety_finding_audit
+                    (request_id, trace_id, user_id, domain, code, reviewer, action, message, severity, detail_json,
+                     route_intent, created_at)
+                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, current_timestamp(6))
+                    """,
+                    (
+                        state.request_id,
+                        state.trace_id,
+                        state.user_id,
+                        "FINANCE",
+                        finding.code,
+                        finding.reviewer,
+                        finding.action,
+                        finding.message,
+                        finding.severity,
+                        json.dumps(redact_value(finding.detail), ensure_ascii=False),
+                        state.normalized_intent,
+                    ),
+                )
+
+    def record_approval_decision(self, state: GraphState, decision: dict[str, Any]) -> None:
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    insert into agent_safety_approval_audit
+                    (request_id, trace_id, user_id, domain, tool_name, finding_code, approved, scope, reused,
+                     approval_key, expires_at, created_at)
+                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, current_timestamp(6))
+                    """,
+                    (
+                        state.request_id,
+                        state.trace_id,
+                        state.user_id,
+                        "FINANCE",
+                        decision.get("tool_name", ""),
+                        decision.get("finding_code", ""),
+                        1 if decision.get("approved") else 0,
+                        decision.get("scope", ""),
+                        1 if decision.get("reused") else 0,
+                        decision.get("approval_key"),
+                        decision.get("expires_at"),
+                    ),
+                )
 
 
 def build_audit_store() -> AuditStore:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import uuid
 
 from finpilot.config import settings
 from finpilot.rag.chunker import KnowledgeChunker
@@ -21,7 +22,7 @@ class ResourceKnowledgeImporter:
                 continue
             content = path.read_text(encoding="utf-8", errors="ignore")
             request = KnowledgeDocumentRequest(
-                document_id=f"resource-finance-{abs(hash(path.name))}",
+                document_id=self._resource_document_id(path.name),
                 domain="FINANCE",
                 title=path.stem,
                 source=str(path),
@@ -45,4 +46,8 @@ class ResourceKnowledgeImporter:
     def _tags(self, path: Path) -> list[str]:
         stem = path.stem
         return [part for part in stem.replace("_", " ").split() if part]
+
+    @staticmethod
+    def _resource_document_id(file_name: str) -> str:
+        return f"resource-finance-{uuid.uuid5(uuid.NAMESPACE_URL, file_name)}"
 

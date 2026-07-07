@@ -39,3 +39,15 @@ def test_eval_datasets_cover_core_assertion_types():
     assert any(case.relevant_document_ids for case in cases)
     assert any(case.expected_answer_contains for case in cases)
     assert any(case.threat for case in cases)
+    assert any(case.expected_safety_action for case in cases)
+    assert any(case.expected_safety_code for case in cases)
+
+
+def test_safety_threat_cases_declare_explicit_expected_safety_outcome():
+    root = Path("evals/datasets")
+    runner = EvalRunner(agent_service=object(), audit_store=object(), root=root)
+
+    for case in runner._load_suite("safety"):
+        if case.threat:
+            assert case.expected_safety_action
+            assert case.expected_safety_code

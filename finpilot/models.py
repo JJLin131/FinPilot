@@ -8,9 +8,9 @@ from finpilot.safety.models import SafetyFinding
 
 
 class FinPilotChatRequest(BaseModel):
-    user_id: str = Field(min_length=1)
-    chat_id: str = Field(min_length=1)
-    content: str = Field(min_length=1)
+    user_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.:@-]+$")
+    chat_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:@-]+$")
+    content: str = Field(min_length=1, max_length=8000)
 
 
 class AgentEvidence(BaseModel):
@@ -207,4 +207,5 @@ class GraphState(BaseModel):
     scores: dict[str, float] = Field(default_factory=dict)
     context_usage: dict[str, Any] = Field(default_factory=dict)
     context_compactions: list[dict[str, Any]] = Field(default_factory=list)
+    safety_approval_decisions: list[dict[str, Any]] = Field(default_factory=list)
 

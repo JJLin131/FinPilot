@@ -255,6 +255,10 @@ class FinPilotGraph:
                     self.audit_store.record_unknown_intent(graph_state, decision)
                 for issue in graph_state.issues:
                     self.audit_store.record_issue(graph_state, issue)
+                for finding in graph_state.safety_findings:
+                    self.audit_store.record_safety_finding(graph_state, finding)
+                for decision_event in graph_state.safety_approval_decisions:
+                    self.audit_store.record_approval_decision(graph_state, decision_event)
                 for invocation in graph_state.tool_invocations:
                     self.audit_store.record_tool(graph_state, invocation)
             except Exception as exc:

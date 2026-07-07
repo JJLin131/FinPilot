@@ -116,6 +116,8 @@ def sync_local_datasets(root: Path) -> None:
                         "expected_answer_contains": payload.get("expected_answer_contains"),
                         "relevant_document_ids": payload.get("relevant_document_ids", []),
                         "threat": payload.get("threat"),
+                        "expected_safety_action": payload.get("expected_safety_action"),
+                        "expected_safety_code": payload.get("expected_safety_code"),
                     },
                     metadata={"suite": payload["suite"]},
                 )

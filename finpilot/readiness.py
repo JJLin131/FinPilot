@@ -26,9 +26,9 @@ def check_runtime_readiness() -> RuntimeReadiness:
     checks = [
         _check_mysql(),
         _check_bm25(),
-        _probe_http("chroma", settings.chroma_base_url, ["/api/v1/heartbeat", "/api/v2/heartbeat", "/"]),
-        _probe_http("embedding", settings.embedding_base_url, ["/api/tags", "/"]),
-        _probe_http("reranker", settings.reranker_base_url, ["/healthz", "/"]),
+        _check_optional_http("chroma", settings.vector_enabled, settings.chroma_base_url, ["/api/v1/heartbeat", "/api/v2/heartbeat", "/"]),
+        _check_optional_http("embedding", settings.vector_enabled, settings.embedding_base_url, ["/api/tags", "/"]),
+        _check_optional_http("reranker", settings.reranker_enabled, settings.reranker_base_url, ["/healthz", "/"]),
         _check_llm_config(),
     ]
     return RuntimeReadiness(status=_overall_status(checks), checks=checks)
@@ -52,11 +52,30 @@ def _check_bm25() -> ReadinessCheck:
 
 
 def _check_llm_config() -> ReadinessCheck:
-    if settings.ai_provider.lower() != "deepseek":
-        return ReadinessCheck(name="llm_config", status="ok", detail=f"provider={settings.ai_provider}")
+    deepseek_features = []
+    if settings.ai_provider.lower() == "deepseek":
+        deepseek_features.append("ai")
+    if settings.routing_llm_enabled and settings.routing_provider.lower() == "deepseek":
+        deepseek_features.append("routing")
+    if settings.rag_curation_enabled and settings.rag_curation_provider.lower() == "deepseek":
+        deepseek_features.append("rag_curation")
+    if settings.safety_response_llm_enabled and settings.safety_response_provider.lower() == "deepseek":
+        deepseek_features.append("safety_response")
+    if not deepseek_features:
+        return ReadinessCheck(name="llm_config", status="ok", detail="no DeepSeek-backed feature enabled")
     if settings.deepseek_api_key:
-        return ReadinessCheck(name="llm_config", status="ok", detail="DeepSeek API key configured")
-    return ReadinessCheck(name="llm_config", status="failed", detail="DEEPSEEK_API_KEY is not configured")
+        return ReadinessCheck(name="llm_config", status="ok", detail=f"DeepSeek API key configured for {','.join(deepseek_features)}")
+    return ReadinessCheck(
+        name="llm_config",
+        status="failed",
+        detail=f"DEEPSEEK_API_KEY is not configured for {','.join(deepseek_features)}",
+    )
+
+
+def _check_optional_http(name: str, enabled: bool, base_url: str, paths: list[str]) -> ReadinessCheck:
+    if not enabled:
+        return ReadinessCheck(name=name, status="ok", detail="disabled")
+    return _probe_http(name, base_url, paths)
 
 
 def _probe_http(name: str, base_url: str, paths: list[str]) -> ReadinessCheck:

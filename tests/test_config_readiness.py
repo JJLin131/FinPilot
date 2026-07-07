@@ -37,6 +37,27 @@ def test_non_local_settings_reject_missing_deepseek_key():
         )
 
 
+def test_non_local_settings_reject_missing_deepseek_key_for_all_deepseek_features():
+    for feature, overrides in {
+        "routing_provider": {"ai_provider": "ollama", "routing_provider": "deepseek", "routing_llm_enabled": True},
+        "rag_curation_provider": {"ai_provider": "ollama", "rag_curation_provider": "deepseek", "rag_curation_enabled": True},
+        "safety_response_provider": {
+            "ai_provider": "ollama",
+            "safety_response_provider": "deepseek",
+            "safety_response_llm_enabled": True,
+        },
+    }.items():
+        with pytest.raises(ValidationError, match=feature):
+            Settings(
+                _env_file=None,
+                app_env="docker",
+                mysql_user="finpilot",
+                mysql_password="not-default-password",
+                langfuse_enabled=False,
+                **overrides,
+            )
+
+
 def test_non_local_settings_reject_default_langfuse_secret_when_enabled():
     with pytest.raises(ValidationError, match="LANGFUSE_SECRET_KEY"):
         Settings(
@@ -138,6 +159,44 @@ def test_check_runtime_readiness_combines_component_statuses(monkeypatch, tmp_pa
         "reranker": "ok",
         "llm_config": "ok",
     }
+
+
+def test_check_runtime_readiness_marks_disabled_optional_dependencies_ok(monkeypatch, tmp_path):
+    import finpilot.readiness as readiness
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql: str) -> None:
+            self.sql = sql
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    index_path = tmp_path / "knowledge.json"
+    index_path.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(readiness, "connect_runtime_mysql", lambda: FakeConnection())
+    monkeypatch.setattr(readiness.settings, "bm25_index_path", index_path)
+    monkeypatch.setattr(readiness.settings, "deepseek_api_key", "sk-test")
+    monkeypatch.setattr(readiness.settings, "vector_enabled", False)
+    monkeypatch.setattr(readiness.settings, "reranker_enabled", False)
+
+    result = readiness.check_runtime_readiness()
+
+    assert result.status == "ok"
+    assert next(check for check in result.checks if check.name == "chroma").detail == "disabled"
+    assert next(check for check in result.checks if check.name == "reranker").detail == "disabled"
 
 
 def test_check_runtime_readiness_marks_failed_for_required_dependency(monkeypatch):

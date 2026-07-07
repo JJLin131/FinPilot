@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import inspect
 import json
+import uuid
 
 from finpilot.agent.service import FinPilotService
 from finpilot.models import FinPilotChatRequest
 from finpilot.rag.bm25 import Bm25ChunkIndex
+from finpilot.rag.importer import ResourceKnowledgeImporter
 from finpilot.rag.models import KnowledgeDocumentRequest
 
 
@@ -71,3 +73,9 @@ def test_bm25_reads_legacy_tenant_index(tmp_path):
     matches = index.search("FINANCE", "工资审批", limit=3)
 
     assert [match.document_id for match in matches] == ["doc-1"]
+
+
+def test_resource_importer_uses_stable_uuid_document_ids():
+    expected = f"resource-finance-{uuid.uuid5(uuid.NAMESPACE_URL, '01_demo.md')}"
+
+    assert ResourceKnowledgeImporter._resource_document_id("01_demo.md") == expected

@@ -89,7 +89,17 @@ def test_mock_transfer_tool_executes_after_interactive_approval():
     assert invocation.output["approved_operation"] == "transfer_mock_funds"
 
 
-def test_finance_qa_subagent_exposes_mock_transfer_tool_for_manual_approval_testing():
+def test_finance_qa_subagent_hides_mock_transfer_tool_by_default(monkeypatch):
+    monkeypatch.setattr(settings, "enable_demo_risk_tools", False, raising=False)
+    registry = ToolRegistry(EmptyRagService(), safety=SafetyReviewService())
+
+    context = FinanceQaSubAgent().build_context(registry)
+
+    assert [tool.name for tool in context.allowed_tools] == ["search_finance_knowledge"]
+
+
+def test_finance_qa_subagent_exposes_mock_transfer_tool_only_when_enabled(monkeypatch):
+    monkeypatch.setattr(settings, "enable_demo_risk_tools", True, raising=False)
     registry = ToolRegistry(EmptyRagService(), safety=SafetyReviewService())
 
     context = FinanceQaSubAgent().build_context(registry)
@@ -110,6 +120,8 @@ class RecordingAuditStore(AuditStore):
         self.issues: list[AgentIssue] = []
         self.tools: list[ToolInvocation] = []
         self.unknown = []
+        self.safety_findings: list[SafetyFinding] = []
+        self.approvals: list[dict] = []
 
     def record_tool(self, state: GraphState, invocation: ToolInvocation) -> None:
         self.tools.append(invocation)
@@ -122,6 +134,12 @@ class RecordingAuditStore(AuditStore):
 
     def record_eval_run(self, result: EvalSuiteResult) -> None:
         pass
+
+    def record_safety_finding(self, state: GraphState, finding: SafetyFinding) -> None:
+        self.safety_findings.append(finding)
+
+    def record_approval_decision(self, state: GraphState, decision: dict) -> None:
+        self.approvals.append(decision)
 
 
 class BlockingInputSafety(SafetyReviewService):
@@ -156,6 +174,7 @@ def test_graph_blocks_input_before_routing_and_records_safety_issue():
     assert response.issues[0].component == "safety"
     assert response.safety_findings[0].code == "INPUT_PROMPT_INJECTION_BLOCKED"
     assert [issue.code for issue in audit.issues] == ["INPUT_PROMPT_INJECTION_BLOCKED"]
+    assert [finding.code for finding in audit.safety_findings] == ["INPUT_PROMPT_INJECTION_BLOCKED"]
 
 
 class BlockingResponseSafety(SafetyReviewService):

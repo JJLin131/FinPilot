@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Header, HTTPException
 
 from finpilot.agent.service import FinPilotService
@@ -12,10 +14,19 @@ from finpilot.responses import prepare_chat_response
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="FinPilot", version="0.1.0")
     service = FinPilotService()
     eval_runner = EvalRunner(service, service.audit_store)
     lifecycle_service = KnowledgeLifecycleService(service.rag_service)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        del app
+        try:
+            yield
+        finally:
+            service.shutdown()
+
+    app = FastAPI(title="FinPilot", version="0.1.0", lifespan=lifespan)
 
     @app.get("/healthz")
     def healthz():
@@ -24,10 +35,6 @@ def create_app() -> FastAPI:
     @app.get("/readyz", response_model=RuntimeReadiness)
     def readyz():
         return check_runtime_readiness()
-
-    @app.on_event("shutdown")
-    def shutdown_service():
-        service.shutdown()
 
     @app.post("/api/finance/chat", response_model=AgentChatResponse, response_model_exclude_none=True)
     def finance_chat(request: FinPilotChatRequest, x_debug_trace: str | None = Header(default=None)):

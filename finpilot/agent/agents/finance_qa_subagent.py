@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from finpilot.agent.runtime import AgentRuntime
 from finpilot.agent.tools import ToolRegistry
+from finpilot.config import settings
 from finpilot.intents import UNKNOWN_INTENT_ANSWER
 from finpilot.models import GraphState, SubAgentContext
 
@@ -22,6 +23,9 @@ class FinanceQaSubAgent:
         return state
 
     def build_context(self, tools: ToolRegistry) -> SubAgentContext:
+        tool_names = ["search_finance_knowledge"]
+        if settings.enable_demo_risk_tools:
+            tool_names.append("transfer_mock_funds")
         return SubAgentContext(
             agent_name=self.name,
             role="You are a finance knowledge QA sub-agent.",
@@ -36,7 +40,7 @@ class FinanceQaSubAgent:
                 "A supported answer can be produced from evidence.",
                 "Or the available evidence is insufficient and the agent stops clearly.",
             ],
-            allowed_tools=tools.list_allowed(["search_finance_knowledge", "transfer_mock_funds"]),
+            allowed_tools=tools.list_allowed(tool_names),
             max_steps=3,
             context_policy=self.context_policy,
         )
