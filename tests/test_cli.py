@@ -9,6 +9,7 @@ from finpilot import cli
 from finpilot.memory.models import ChatSessionSummary, ChatTurn
 from finpilot.models import AgentChatResponse, AgentEvidence, RouteDecision, ToolInvocation
 from finpilot.safety.approval import ApprovalDecision
+from finpilot.safety.models import SafetyFinding
 
 
 runner = CliRunner()
@@ -173,6 +174,25 @@ def test_cli_approval_decision_parses_once_session_and_deny():
     assert cli._approval_decision_from_text("session") == ApprovalDecision(scope="session")
     assert cli._approval_decision_from_text("d") == ApprovalDecision(scope="deny")
     assert cli._approval_decision_from_text("unexpected") == ApprovalDecision(scope="deny")
+
+
+def test_safety_review_service_reuses_chat_session_approval_service():
+    approval_service = cli.ApprovalService(callback=lambda request: cli.ApprovalDecision(scope="session"))
+    first = cli._build_safety_review_service(interactive_approval=True, approval_service=approval_service)
+    second = cli._build_safety_review_service(interactive_approval=True, approval_service=approval_service)
+    finding = SafetyFinding(
+        code="TOOL_OPERATION_REQUIRES_APPROVAL",
+        reviewer="operation_risk",
+        action="REQUIRE_APPROVAL",
+        message="approval required",
+        severity="warning",
+    )
+
+    first.approval_service.resolve(finding, tool_name="transfer_mock_funds", parameters={"amount": 1000})
+    result = second.approval_service.resolve(finding, tool_name="transfer_mock_funds", parameters={"amount": 1000})
+
+    assert result.approved is True
+    assert len(approval_service.session_approvals) == 1
 
 
 def test_chat_can_list_history_and_resume(monkeypatch, tmp_path):

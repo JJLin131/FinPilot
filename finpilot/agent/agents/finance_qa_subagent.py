@@ -36,11 +36,10 @@ class FinanceQaSubAgent:
                 "A supported answer can be produced from evidence.",
                 "Or the available evidence is insufficient and the agent stops clearly.",
             ],
-            allowed_tools=tools.list_allowed(["search_finance_knowledge"]),
+            allowed_tools=tools.list_allowed(["search_finance_knowledge", "transfer_mock_funds"]),
             max_steps=3,
             context_policy=self.context_policy,
         )
 
 
 QuerySubAgent = FinanceQaSubAgent
-

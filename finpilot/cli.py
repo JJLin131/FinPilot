@@ -81,14 +81,21 @@ knowledge_app = typer.Typer(help="Manage shared FinPilot knowledge resources.", 
 app.add_typer(knowledge_app, name="knowledge")
 
 
-def _default_service_factory(*, interactive_approval: bool = False) -> "FinPilotService":
+def _default_service_factory(
+    *, interactive_approval: bool = False, approval_service: ApprovalService | None = None
+) -> "FinPilotService":
     _configure_cli_runtime()
     stderr = io.StringIO()
     with contextlib.redirect_stderr(stderr), warnings.catch_warnings():
         warnings.simplefilter("ignore")
         from finpilot.agent.service import FinPilotService
 
-        return FinPilotService(safety=_build_safety_review_service(interactive_approval=interactive_approval))
+        return FinPilotService(
+            safety=_build_safety_review_service(
+                interactive_approval=interactive_approval,
+                approval_service=approval_service,
+            )
+        )
 
 
 service_factory: ServiceFactory = _default_service_factory
@@ -148,6 +155,7 @@ def chat_command(
     current_chat_id = resume or chat_id or _new_chat_id()
     debug_enabled = debug
     history = FileHistory(str(_history_path()))
+    approval_service = ApprovalService(callback=_prompt_cli_approval)
 
     _render_splash(resolved_user_id, current_chat_id, debug_enabled)
     if resume:
@@ -178,6 +186,7 @@ def chat_command(
             debug=debug_enabled,
             status_message=THINKING_TEXT,
             interactive_approval=True,
+            approval_service=approval_service,
         )
         _render_response(response, debug=debug_enabled)
 
@@ -290,10 +299,11 @@ def _run_chat(
     status_message: str,
     quiet: bool = False,
     interactive_approval: bool = False,
+    approval_service: ApprovalService | None = None,
 ) -> AgentChatResponse:
     service: FinPilotService | None = None
     try:
-        service = _create_service(interactive_approval=interactive_approval)
+        service = _create_service(interactive_approval=interactive_approval, approval_service=approval_service)
         if quiet:
             response = service.chat(user_id, chat_id, content)
         else:
@@ -307,14 +317,18 @@ def _run_chat(
     return prepare_chat_response(response, debug_enabled=debug)
 
 
-def _create_service(*, interactive_approval: bool = False) -> FinPilotService:
+def _create_service(
+    *, interactive_approval: bool = False, approval_service: ApprovalService | None = None
+) -> FinPilotService:
     if service_factory is _default_service_factory:
-        return service_factory(interactive_approval=interactive_approval)
+        return service_factory(interactive_approval=interactive_approval, approval_service=approval_service)
     return service_factory()
 
 
-def _build_safety_review_service(*, interactive_approval: bool) -> SafetyReviewService:
-    approval = ApprovalService(callback=_prompt_cli_approval if interactive_approval else None)
+def _build_safety_review_service(
+    *, interactive_approval: bool, approval_service: ApprovalService | None = None
+) -> SafetyReviewService:
+    approval = approval_service or ApprovalService(callback=_prompt_cli_approval if interactive_approval else None)
     return SafetyReviewService(approval_service=approval, interactive_approval=interactive_approval)
 
 

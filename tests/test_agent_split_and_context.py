@@ -52,9 +52,8 @@ def test_finance_qa_subagent_builds_finance_policy_context():
     context = runtime.contexts[0]
     assert context.agent_name == "QueryAgent"
     assert context.context_policy == "finance_qa_agent"
-    assert [tool.name for tool in context.allowed_tools] == ["search_finance_knowledge"]
+    assert [tool.name for tool in context.allowed_tools] == ["search_finance_knowledge", "transfer_mock_funds"]
 
 
 def test_query_subagent_remains_a_compatibility_alias():
     assert QuerySubAgent is FinanceQaSubAgent
-

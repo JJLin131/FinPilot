@@ -19,6 +19,14 @@ class SearchFinanceKnowledgeArgs(BaseModel):
     limit: StrictInt = Field(default=3, ge=1, le=5)
 
 
+class TransferMockFundsArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    account_no: StrictStr = Field(min_length=4, max_length=64)
+    amount: float = Field(gt=0, le=1_000_000)
+    currency: StrictStr = Field(default="CNY", min_length=3, max_length=3)
+
+
 @dataclass
 class ToolResult:
     answer_fragment: str
@@ -57,6 +65,18 @@ class ToolRegistry:
                 arguments={"query": "string", "limit": "integer, optional"},
                 args_model=SearchFinanceKnowledgeArgs,
                 executor=self._search_finance_knowledge,
+            )
+        )
+        self.register(
+            ToolSpec(
+                name="transfer_mock_funds",
+                description="Mock a funds transfer request for manual safety approval testing; it never moves money.",
+                when_to_use=(
+                    "Use only when the user explicitly wants to test high-risk operation approval or asks for a mock transfer."
+                ),
+                arguments={"account_no": "string", "amount": "number", "currency": "string, optional"},
+                args_model=TransferMockFundsArgs,
+                executor=self._transfer_mock_funds,
             )
         )
 
@@ -118,6 +138,17 @@ class ToolRegistry:
         if issues:
             output["issues"] = [issue.model_dump(mode="json") for issue in issues]
         return output
+
+    def _transfer_mock_funds(self, state: GraphState, parameters: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "mock": True,
+            "approved_operation": "transfer_mock_funds",
+            "user_id": state.user_id,
+            "account_no": parameters["account_no"],
+            "amount": parameters["amount"],
+            "currency": parameters.get("currency", "CNY"),
+            "message": "Mock transfer approved for safety approval testing; no money was moved.",
+        }
 
     def _consume_rag_issues(self):
         consume = getattr(self.rag_service, "consume_issues", None)

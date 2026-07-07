@@ -3,12 +3,14 @@ from __future__ import annotations
 import pytest
 
 from finpilot.agent.graph import FinPilotGraph
+from finpilot.agent.agents.finance_qa_subagent import FinanceQaSubAgent
 from finpilot.agent.router import IntentRouter
 from finpilot.agent.tools import ToolRegistry
 from finpilot.config import settings
 from finpilot.memory.models import MemoryContext
 from finpilot.models import AgentIssue, EvalSuiteResult, GraphState, RouteDecision, ToolInvocation
 from finpilot.observability.audit import AuditStore
+from finpilot.safety.approval import ApprovalDecision, ApprovalService
 from finpilot.safety.models import SafetyFinding, SafetyReviewResult
 from finpilot.safety.service import SafetyReviewService
 
@@ -50,6 +52,49 @@ def test_tool_registry_blocks_invalid_arguments_before_executor_runs():
     assert invocation.status == "BLOCKED"
     assert invocation.output["safety"]["findings"][0]["code"] == "TOOL_ARGUMENT_VALIDATION_FAILED"
     assert rag.called is False
+
+
+def test_mock_transfer_tool_requires_approval_before_execution():
+    registry = ToolRegistry(EmptyRagService(), safety=SafetyReviewService())
+
+    invocation = registry.invoke(
+        _state(),
+        "transfer_mock_funds",
+        account_no="6222020202020202020",
+        amount=1000,
+        currency="CNY",
+    )
+
+    assert invocation.status == "BLOCKED"
+    assert invocation.output["safety"]["findings"][0]["code"] == "TOOL_OPERATION_REQUIRES_APPROVAL"
+
+
+def test_mock_transfer_tool_executes_after_interactive_approval():
+    safety = SafetyReviewService(
+        approval_service=ApprovalService(callback=lambda request: ApprovalDecision(scope="once")),
+        interactive_approval=True,
+    )
+    registry = ToolRegistry(EmptyRagService(), safety=safety)
+
+    invocation = registry.invoke(
+        _state(),
+        "transfer_mock_funds",
+        account_no="6222020202020202020",
+        amount=1000,
+        currency="CNY",
+    )
+
+    assert invocation.status == "SUCCEEDED"
+    assert invocation.output["mock"] is True
+    assert invocation.output["approved_operation"] == "transfer_mock_funds"
+
+
+def test_finance_qa_subagent_exposes_mock_transfer_tool_for_manual_approval_testing():
+    registry = ToolRegistry(EmptyRagService(), safety=SafetyReviewService())
+
+    context = FinanceQaSubAgent().build_context(registry)
+
+    assert [tool.name for tool in context.allowed_tools] == ["search_finance_knowledge", "transfer_mock_funds"]
 
 
 class FakeMemory:
