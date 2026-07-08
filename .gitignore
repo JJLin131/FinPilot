@@ -8,3 +8,7 @@ __pycache__/
 .env
 docker/.env
 *.egg-info/
+/web/node_modules/
+/web/dist/
+/web/*.tsbuildinfo
+/web/vite-dev*.log
