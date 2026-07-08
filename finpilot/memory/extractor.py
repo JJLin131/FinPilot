@@ -20,15 +20,15 @@ Return JSON only with this schema:
 {{
   "isForgetIntent": false,
   "structuredMemories": {{
-    "city": "鏉窞",
-    "occupation": "閾惰浠庝笟鑰?
+    "city": "杭州",
+    "occupation": "财务经理"
   }},
   "semanticMemories": [
     {{
       "memoryKey": "userSalary",
-      "memoryValue": "鐢ㄦ埛姣忎釜鏈?2鍙蜂細鍙戝伐璧勫埌宸ヨ祫鍗°€?,
+      "memoryValue": "用户每个月12号会发工资到工资卡。",
       "confidence": 0.9,
-      "evidence": "鐢ㄦ埛璇达細鎴戞瘡涓湀12鍙烽兘浼氬彂宸ヨ祫鍒拌繖寮犲崱"
+      "evidence": "用户说：我每个月12号都会发工资到这张卡"
     }}
   ]
 }}
@@ -124,4 +124,3 @@ Assistant answer:
         if start >= 0 and end > start:
             return json.loads(text[start : end + 1])
         return json.loads(text)
-
