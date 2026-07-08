@@ -1,52 +1,69 @@
-import { render, screen, waitFor } from "@testing-library/react";
-import { vi } from "vitest";
+import { render, screen, within } from "@testing-library/react";
 import App from "./App";
 
-describe("FinPilot showcase hero", () => {
-  it("renders the treasury positioning and primary actions", () => {
+describe("FinPilot showcase page", () => {
+  it("renders the reference-style hero as a full first screen without bottom capability cards", () => {
     render(<App />);
 
-    expect(screen.getByRole("heading", { name: /让财资决策穿透\s*每一层上下文/ })).toBeInTheDocument();
-    expect(screen.getAllByText(/Finance Agent Runtime/).length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "查看运行链路" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "启动 CLI" })).toBeInTheDocument();
+    const hero = screen.getByRole("region", { name: "FinPilot 首页首屏" });
+    const heroCopy = within(hero).getByTestId("hero-copy");
+    const watermark = within(hero).getByTestId("hero-watermark");
+
+    expect(within(heroCopy).getByRole("heading", { name: "FinPilot" })).toBeInTheDocument();
+    expect(within(heroCopy).getByText("企业财资管理的智能中枢")).toBeInTheDocument();
+    expect(within(heroCopy).getByText("多智能体协同 · 驱动财资智能化")).toBeInTheDocument();
+    expect(within(heroCopy).getByText(/覆盖从账户到交易、从分析到决策的全链路场景/)).toBeInTheDocument();
+
+    expect(heroCopy).toHaveClass("lg:pl-10");
+    expect(heroCopy).toHaveClass("xl:pl-16");
+    expect(watermark).toHaveClass("-top-14");
+    expect(watermark).toHaveClass("text-white/[0.035]");
+    expect(within(hero).queryByText("财资处理与分析")).not.toBeInTheDocument();
+    expect(within(hero).queryByText("合规与审计保障")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Launch CLI/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
 
-  it("exposes accessible navigation and the interactive reveal layer", () => {
+  it("exposes split page sections through the top navigation", () => {
     render(<App />);
 
-    expect(screen.getByRole("navigation", { name: "FinPilot 主导航" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "打开移动导航" })).toBeInTheDocument();
-    expect(screen.getByTestId("reveal-layer")).toHaveAttribute("aria-hidden", "true");
+    expect(screen.getByRole("navigation", { name: "FinPilot 页面导航" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "产品能力" })).toHaveAttribute("href", "#capabilities");
+    expect(screen.getByRole("link", { name: "解决方案" })).toHaveAttribute("href", "#workflow");
+    expect(screen.getByRole("link", { name: "行业场景" })).toHaveAttribute("href", "#scenarios");
+    expect(screen.getByRole("link", { name: "技术架构" })).toHaveAttribute("href", "#architecture");
+    expect(screen.getByRole("link", { name: "关于我们" })).toHaveAttribute("href", "#about");
+
+    expect(screen.getByRole("region", { name: "产品能力" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "解决方案" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "行业场景" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Agent 技术架构" })).toBeInTheDocument();
   });
 
-  it("keeps the reveal layer hidden until pointer movement paints a mask", async () => {
-    const ctx = {
-      beginPath: vi.fn(),
-      arc: vi.fn(),
-      clearRect: vi.fn(),
-      createRadialGradient: vi.fn(() => ({ addColorStop: vi.fn() })),
-      fill: vi.fn(),
-      fillStyle: "",
-    };
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
-    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue("data:image/png;base64,mask");
-
+  it("keeps later sections visually connected to the hero instead of flat black backgrounds", () => {
     render(<App />);
-    const revealLayer = screen.getByTestId("reveal-layer");
 
-    expect(revealLayer).toHaveStyle({ opacity: "0" });
-
-    const event = new Event("pointermove") as PointerEvent;
-    Object.defineProperties(event, {
-      clientX: { value: 320 },
-      clientY: { value: 240 },
+    ["产品能力", "解决方案", "行业场景", "Agent 技术架构", "关于我们"].forEach((label) => {
+      const section = screen.getByRole("region", { name: label });
+      expect(section).toHaveClass("section-atmosphere");
     });
-    window.dispatchEvent(event);
 
-    await waitFor(() => {
-      expect(revealLayer).toHaveStyle({ opacity: "1" });
-      expect(revealLayer).toHaveStyle({ maskImage: "url(data:image/png;base64,mask)" });
+    ["多智能体协同", "意图识别与理解", "知识与规则驱动", "财资处理与分析", "合规与审计保障"].forEach(
+      (label) => {
+        expect(screen.getByText(label)).toBeInTheDocument();
+      },
+    );
+
+    [
+      "LangGraph 编排",
+      "RAG 知识检索",
+      "记忆与上下文",
+      "安全护栏",
+      "工具调用",
+      "可观测性",
+      "评测与回归",
+    ].forEach((label) => {
+      expect(screen.getByText(label)).toBeInTheDocument();
     });
   });
 });
