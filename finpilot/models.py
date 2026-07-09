@@ -153,12 +153,21 @@ class EvalCase(BaseModel):
     chat_id: str
     content: str
     expected_intent: str | None = None
+    expected_agent: str | None = None
+    expected_status: str | None = None
     expected_tool: str | None = None
+    expected_tool_status: str | None = None
+    expected_tool_args: dict[str, Any] = Field(default_factory=dict)
     expected_answer_contains: str | None = None
     relevant_document_ids: list[str] = Field(default_factory=list)
+    expected_evidence_tool: str | None = None
+    expected_reranked_document_ids: list[str] = Field(default_factory=list)
     threat: str | None = None
     expected_safety_action: str | None = None
     expected_safety_code: str | None = None
+    requires_approval: bool = False
+    privacy_forbidden_fields: list[str] = Field(default_factory=list)
+    metric_tags: list[str] = Field(default_factory=list)
 
 
 class EvalSuiteResult(BaseModel):
@@ -167,6 +176,7 @@ class EvalSuiteResult(BaseModel):
     passed_cases: int
     score: float
     details: list[dict[str, Any]] = Field(default_factory=list)
+    metrics: dict[str, Any] = Field(default_factory=dict)
 
 
 class GraphState(BaseModel):
