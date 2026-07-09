@@ -1,7 +1,7 @@
 <p align="center">
-  <img src="docs/assets/finpilot-icon.svg" alt="FinPilot icon" width="96" />
+  <img src="web/public/finpilot-icon.png" alt="FinPilot 项目图标" width="96" />
   <br />
-  <img src="docs/assets/finpilot-wordmark.svg" alt="FinPilot" width="720" />
+  <img src="web/src/assets/finpilot-treasury-hero-v2.png" alt="FinPilot 财资智能系统展示图" width="820" />
 </p>
 
 <p align="center">
@@ -265,8 +265,7 @@ tests/                # unit and smoke tests
 evals/datasets/       # JSONL smoke datasets
 docker/               # optional local AI lab compose config
 observability/        # OTel/Langfuse related config
-web/                  # product showcase frontend
-docs/assets/          # README visuals and project artwork
+web/                  # product showcase frontend and shared visual assets
 ```
 
 ## 排障手册
