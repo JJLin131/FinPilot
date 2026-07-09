@@ -1,7 +1,5 @@
 <p align="center">
   <img src="web/public/finpilot-icon.png" alt="FinPilot 项目图标" width="96" />
-  <br />
-  <img src="web/src/assets/finpilot-treasury-hero-v2.png" alt="FinPilot 财资智能系统展示图" width="820" />
 </p>
 
 <p align="center">
