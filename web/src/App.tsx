@@ -360,7 +360,6 @@ function App() {
           <SectionHeading
             eyebrow="Treasury Scenarios"
             title="行业场景"
-            description="围绕企业财资管理的常见链路组织内容，避免页面只停留在概念层，让能力与真实业务对象对应起来。"
           />
 
           <div className="mx-auto grid max-w-7xl gap-4 lg:grid-cols-5">
@@ -386,7 +385,6 @@ function App() {
           <SectionHeading
             eyebrow="Agent Architecture"
             title="Agent 架构"
-            description="参考项目实际架构，将 API/CLI 入口、LangGraph 流程、RAG、记忆、安全、工具、可观测性和评测组织成可读的分层视图。"
           />
 
           <div className="mx-auto max-w-7xl">
@@ -497,7 +495,7 @@ function App() {
                 className="inline-flex min-h-11 items-center gap-2 rounded-md border border-white/12 bg-white/[0.06] px-4 py-2 text-sm font-semibold text-white transition duration-200 hover:border-[#d8b678]/55 hover:text-[#d8b678] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#d8b678]"
               >
                 <Mail className="h-4 w-4" strokeWidth={1.8} aria-hidden="true" />
-                联系邮箱
+                yunxiaoli899@gamil.com
               </a>
             </div>
           </div>
