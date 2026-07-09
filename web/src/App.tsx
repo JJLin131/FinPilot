@@ -229,6 +229,11 @@ function App() {
             href="#hero"
             className="flex min-h-11 items-center gap-3 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-[#d8b678]"
           >
+            <img
+              src="/finpilot-icon.png"
+              alt="FinPilot 项目图标"
+              className="h-10 w-10 rounded-lg object-cover shadow-[0_0_24px_rgba(45,216,184,0.18)] sm:h-12 sm:w-12"
+            />
             <span className="font-display text-3xl text-white sm:text-4xl">FinPilot</span>
             <span className="hidden h-5 w-px bg-white/32 sm:block" aria-hidden="true" />
             <span className="hidden text-sm font-medium tracking-wide text-[#d7d1c5] sm:block">智能财资管理系统</span>

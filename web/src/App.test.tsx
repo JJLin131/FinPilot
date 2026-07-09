@@ -28,6 +28,10 @@ describe("FinPilot showcase page", () => {
     render(<App />);
 
     expect(screen.getByRole("navigation", { name: "FinPilot 页面导航" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "FinPilot 项目图标" })).toHaveAttribute(
+      "src",
+      "/finpilot-icon.png",
+    );
     expect(screen.getByRole("link", { name: "产品能力" })).toHaveAttribute("href", "#capabilities");
     expect(screen.getByRole("link", { name: "解决方案" })).toHaveAttribute("href", "#workflow");
     expect(screen.getByRole("link", { name: "行业场景" })).toHaveAttribute("href", "#scenarios");
