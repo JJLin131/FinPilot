@@ -66,4 +66,21 @@ describe("FinPilot showcase page", () => {
       expect(screen.getByText(label)).toBeInTheDocument();
     });
   });
+
+  it("removes internal page-making notes and shows project contacts in about", () => {
+    render(<App />);
+
+    expect(screen.queryByText(/首屏只保留参考图式的品牌表达/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/用一条可解释链路把用户请求转化为检索/)).not.toBeInTheDocument();
+
+    const about = screen.getByRole("region", { name: "关于我们" });
+    expect(within(about).getByRole("link", { name: "GitHub 项目" })).toHaveAttribute(
+      "href",
+      "https://github.com/JJLin131/FinanceAgent",
+    );
+    expect(within(about).getByRole("link", { name: "联系邮箱" })).toHaveAttribute(
+      "href",
+      "mailto:yunxiaoli899@gamil.com",
+    );
+  });
 });

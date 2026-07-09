@@ -8,10 +8,12 @@ import {
   Database,
   FileSearch,
   Gauge,
+  Github,
   GitBranch,
   Landmark,
   Layers3,
   LockKeyhole,
+  Mail,
   Network,
   PieChart,
   Radar,
@@ -192,14 +194,14 @@ function SectionHeading({
 }: {
   eyebrow: string;
   title: string;
-  description: string;
+  description?: string;
 }) {
   return (
     <div className="mx-auto mb-12 max-w-7xl">
       <p className="font-mono text-xs uppercase tracking-[0.18em] text-[#d8b678]">{eyebrow}</p>
       <div className="mt-4 grid gap-5 lg:grid-cols-[0.82fr_1.18fr] lg:items-end">
         <h2 className="font-display text-4xl font-normal leading-tight text-white sm:text-5xl lg:text-6xl">{title}</h2>
-        <p className="max-w-3xl text-base leading-8 text-[#c5cfdd]">{description}</p>
+        {description ? <p className="max-w-3xl text-base leading-8 text-[#c5cfdd]">{description}</p> : null}
       </div>
     </div>
   );
@@ -308,7 +310,6 @@ function App() {
           <SectionHeading
             eyebrow="Product Capability"
             title="产品能力"
-            description="首屏只保留参考图式的品牌表达；下滑后再展开核心能力，整体沿用黑金财资空间、冷青连接线和克制紫色点缀。"
           />
 
           <div className="mx-auto grid max-w-7xl gap-4 md:grid-cols-2 xl:grid-cols-5">
@@ -334,7 +335,6 @@ function App() {
           <SectionHeading
             eyebrow="Solution Flow"
             title="解决方案"
-            description="用一条可解释链路把用户请求转化为检索、计算、校验和输出，适合企业财资场景中的高可信问答与辅助决策。"
           />
 
           <div className="mx-auto grid max-w-7xl gap-4 md:grid-cols-2 xl:grid-cols-6">
@@ -482,6 +482,24 @@ function App() {
             <p className="mt-6 max-w-2xl text-base leading-8 text-[#c5cfdd]">
               FinPilot 展示的是企业财资智能化的协同中枢能力：强调清晰链路、可验证依据、风险边界和长期可演进的系统治理。
             </p>
+            <div className="mt-8 flex flex-wrap gap-3">
+              <a
+                href="https://github.com/JJLin131/FinanceAgent"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex min-h-11 items-center gap-2 rounded-md border border-white/12 bg-white/[0.06] px-4 py-2 text-sm font-semibold text-white transition duration-200 hover:border-[#74e6ff]/50 hover:text-[#74e6ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#d8b678]"
+              >
+                <Github className="h-4 w-4" strokeWidth={1.8} aria-hidden="true" />
+                GitHub 项目
+              </a>
+              <a
+                href="mailto:yunxiaoli899@gamil.com"
+                className="inline-flex min-h-11 items-center gap-2 rounded-md border border-white/12 bg-white/[0.06] px-4 py-2 text-sm font-semibold text-white transition duration-200 hover:border-[#d8b678]/55 hover:text-[#d8b678] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#d8b678]"
+              >
+                <Mail className="h-4 w-4" strokeWidth={1.8} aria-hidden="true" />
+                联系邮箱
+              </a>
+            </div>
           </div>
           <div className="grid gap-4 sm:grid-cols-3">
             {[
