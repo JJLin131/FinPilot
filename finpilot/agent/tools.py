@@ -82,8 +82,10 @@ class ToolRegistry:
             )
         )
         from finpilot.agent.tooling.files import register_file_tools
+        from finpilot.agent.tooling.treasury import register_treasury_tools
         from finpilot.agent.tooling.web import register_web_tools
 
+        register_treasury_tools(self)
         register_file_tools(self)
         register_web_tools(self)
 

@@ -1,2 +1,4 @@
 {"suite":"tool_use","name":"salary_question_uses_knowledge_search","chat_id":"tool-1","content":"工资发放需要哪些审批？","expected_tool":"search_finance_knowledge"}
 {"suite":"tool_use","name":"balance_question_uses_knowledge_search","chat_id":"tool-2","content":"账户余额查询失败应该怎么处理？","expected_tool":"search_finance_knowledge"}
+{"suite":"tool_use","name":"account_balance_uses_balance_tool","chat_id":"tool-3","content":"query account balance for ACC-001","expected_tool":"query_account_balance"}
+{"suite":"tool_use","name":"transfer_order_uses_transfer_tool","chat_id":"tool-4","content":"create transfer order from ACC-001 to ACC-002","expected_tool":"create_transfer_order"}

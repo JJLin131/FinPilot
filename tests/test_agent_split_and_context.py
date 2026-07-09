@@ -57,3 +57,10 @@ def test_finance_qa_subagent_builds_finance_policy_context():
 
 def test_query_subagent_remains_a_compatibility_alias():
     assert QuerySubAgent is FinanceQaSubAgent
+
+
+def test_subagents_compat_layer_no_longer_exports_transfer_agent():
+    import finpilot.agent.subagents as subagents
+
+    assert "TransferSubAgent" not in subagents.__all__
+    assert not hasattr(subagents, "TransferSubAgent")

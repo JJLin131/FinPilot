@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from finpilot.agent.agents import FinanceQaSubAgent, TransferSubAgent
+from finpilot.agent.agents import FinanceQaSubAgent
 
 
 QuerySubAgent = FinanceQaSubAgent
 
-__all__ = ["FinanceQaSubAgent", "QuerySubAgent", "TransferSubAgent"]
+__all__ = ["FinanceQaSubAgent", "QuerySubAgent"]
 

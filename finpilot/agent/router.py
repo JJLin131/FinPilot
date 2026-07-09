@@ -16,6 +16,13 @@ MIN_SIMILARITY = 0.35
 
 logger = logging.getLogger(__name__)
 
+INTENT_TARGET_AGENTS = {
+    "TREASURY_DATA_QUERY": "TreasuryDataAgent",
+    "TREASURY_OPERATION": "TreasuryOperationAgent",
+    "FINANCE_KNOWLEDGE_QA": "QueryAgent",
+    "GENERAL_KNOWLEDGE_QA": "QueryAgent",
+}
+
 
 @dataclass(frozen=True)
 class ClassificationResult:
@@ -225,7 +232,7 @@ class IntentRouter:
             reason=reason,
             confidence=round(confidence, 4),
             valid=True,
-            target_agent="QueryAgent",
+            target_agent=INTENT_TARGET_AGENTS.get(classifier_intent, "QueryAgent"),
             classifier_intent=classifier_intent,
             embedding_top1_intent=top1,
             embedding_top2_intent=top2,

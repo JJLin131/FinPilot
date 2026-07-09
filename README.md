@@ -2,7 +2,7 @@
 
 FinPilot is a finance agent service and CLI built with `FastAPI + LangGraph + RAG + memory + audit + observability`.
 
-The main business path is finance knowledge QA:
+The original business path is finance knowledge QA:
 
 ```text
 User
@@ -20,6 +20,15 @@ User
 ```
 
 Knowledge is shared across all users and managed by administrators. User isolation applies to chat memory, profile memory, semantic memory, and audit attribution through `user_id + chat_id`.
+
+FinPilot also has two treasury capability agents for backend-oriented business tools:
+
+- `TreasuryDataAgent`: read-only treasury data queries, including account profile, balance, transaction flow, receipt status, and cash-pool position.
+- `TreasuryOperationAgent`: governed mock operations, including payment order creation, transfer order creation, and receipt download preparation.
+
+These agents are split by governance boundary rather than by backend service. Read-only data tools stay visible only to `TreasuryDataAgent`; operation tools stay visible only to `TreasuryOperationAgent` and rely on `ToolSpec.risk_level` for safety review and approval.
+
+Current routed intents are `FINANCE_KNOWLEDGE_QA`, `GENERAL_KNOWLEDGE_QA`, `TREASURY_DATA_QUERY`, `TREASURY_OPERATION`, and `UNKNOWN`. Finance and treasury knowledge questions intentionally share `FINANCE_KNOWLEDGE_QA` and are handled by `QueryAgent`; treasury-specific separation starts at data query and operation governance.
 
 ## Requirements
 
@@ -101,6 +110,13 @@ finpilot tools revoke-read .\docs
 ```
 
 File tools are registered by default but are not visible to `QueryAgent` unless `AGENT_TOOL_ALLOWLISTS` exposes them. `write_file` is treated as a high-risk `write_*` operation and requires interactive approval. Web search uses Brave Search API through `BRAVE_SEARCH_API_KEY`; `fetch_url` only accepts public `http` and `https` URLs and blocks local/private network targets.
+
+Treasury business tools are registered by default and exposed through the dedicated treasury agents:
+
+- Data tools: `query_treasury_account`, `query_account_balance`, `query_transactions`, `query_receipt_status`, `query_cash_pool_position`.
+- Operation tools: `create_payment_order`, `create_transfer_order`, `download_receipt`.
+
+The current operation tools are mock executors for agent orchestration and safety testing. Real backend HTTP calls should replace the executor body without changing the agent boundary.
 
 Bootstrap shared knowledge resources:
 

@@ -7,7 +7,7 @@ from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 
-from finpilot.agent.agents import FinanceQaSubAgent, TransferSubAgent
+from finpilot.agent.agents import FinanceQaSubAgent, TreasuryDataAgent, TreasuryOperationAgent
 from finpilot.agent.router import IntentRouter
 from finpilot.agent.tools import ToolRegistry
 from finpilot.intents import UNKNOWN_INTENT_ANSWER
@@ -37,7 +37,8 @@ class FinPilotGraph:
         self.memory_manager = memory_manager
         self.safety = safety or SafetyReviewService()
         self.query_agent = FinanceQaSubAgent()
-        self.transfer_agent = TransferSubAgent()
+        self.treasury_data_agent = TreasuryDataAgent()
+        self.treasury_operation_agent = TreasuryOperationAgent()
         self.graph = self._build_graph()
 
     def run(self, user_id: str, chat_id: str, content: str) -> AgentChatResponse:
@@ -212,8 +213,10 @@ class FinPilotGraph:
             if graph_state.normalized_intent == "UNKNOWN":
                 graph_state.final_answer = self._issue_answer(graph_state) or UNKNOWN_INTENT_ANSWER
                 return graph_state.model_dump()
-            if graph_state.target_agent == self.transfer_agent.name:
-                graph_state = self.transfer_agent.handle(graph_state, self.tools)
+            if graph_state.target_agent == self.treasury_data_agent.name:
+                graph_state = self.treasury_data_agent.handle(graph_state, self.tools)
+            elif graph_state.target_agent == self.treasury_operation_agent.name:
+                graph_state = self.treasury_operation_agent.handle(graph_state, self.tools)
             else:
                 graph_state = self.query_agent.handle(graph_state, self.tools)
             graph_state.issues.extend(

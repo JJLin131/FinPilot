@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from finpilot.context.builders import (
     build_answer_prompt_context,
@@ -94,17 +95,45 @@ class AgentRuntime:
             decision = self.decision_service.decide(build_agent_decision_prompt(prompt_bundle.payload))
         except Exception as exc:
             logger.warning("Agent decision LLM failed; using deterministic fallback: %s", exc)
-            return self._fallback_decision(loop_context, state)
+            return self._fallback_decision(loop_context, state, subagent_context)
 
         allowed = {tool.name for tool in subagent_context.allowed_tools}
         if decision.decision == "act" and decision.tool_name not in allowed:
-            return self._fallback_decision(loop_context, state)
+            return self._fallback_decision(loop_context, state, subagent_context)
         if decision.decision == "answer" and not decision.enough_information and not state.evidence:
-            return self._fallback_decision(loop_context, state)
+            return self._fallback_decision(loop_context, state, subagent_context)
         return decision
 
-    def _fallback_decision(self, loop_context: LoopContext, state: GraphState) -> AgentDecision:
+    def _fallback_decision(
+        self,
+        loop_context: LoopContext,
+        state: GraphState,
+        subagent_context: SubAgentContext | None = None,
+    ) -> AgentDecision:
         if loop_context.step_index == 0:
+            allowed = {tool.name for tool in subagent_context.allowed_tools} if subagent_context else set()
+            if "query_account_balance" in allowed and state.normalized_intent == "TREASURY_DATA_QUERY":
+                return AgentDecision(
+                    decision="act",
+                    reason="Query treasury account balance with deterministic fallback.",
+                    tool_name="query_account_balance",
+                    tool_args={"accountId": self._extract_identifier(state.user_message, "ACC-001")},
+                    enough_information=False,
+                )
+            if "create_transfer_order" in allowed and state.normalized_intent == "TREASURY_OPERATION":
+                return AgentDecision(
+                    decision="act",
+                    reason="Create mock transfer order with deterministic fallback.",
+                    tool_name="create_transfer_order",
+                    tool_args={
+                        "fromAccountId": self._extract_identifier(state.user_message, "ACC-001"),
+                        "toAccountId": self._extract_identifier(state.user_message, "ACC-002", skip_first=True),
+                        "amount": self._extract_amount(state.user_message),
+                        "currency": "CNY",
+                        "purpose": "mock treasury operation",
+                    },
+                    enough_information=False,
+                )
             return AgentDecision(
                 decision="act",
                 reason="Search finance knowledge before answering.",
@@ -117,6 +146,16 @@ class AgentRuntime:
             reason="No additional useful tool decision is available.",
             enough_information=bool(state.evidence),
         )
+
+    def _extract_identifier(self, text: str, default: str, *, skip_first: bool = False) -> str:
+        matches = re.findall(r"\b[A-Z]{2,8}-[A-Z0-9-]+\b", text.upper())
+        if skip_first and len(matches) > 1:
+            return matches[1]
+        return matches[0] if matches else default
+
+    def _extract_amount(self, text: str) -> float:
+        match = re.search(r"\b\d+(?:\.\d+)?\b", text.replace(",", ""))
+        return float(match.group(0)) if match else 1.0
 
     def _act(
         self,

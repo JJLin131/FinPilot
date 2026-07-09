@@ -1,2 +1,4 @@
 {"suite":"routing","name":"finance_salary_policy_routes_to_qa","chat_id":"routing-1","content":"工资发放审批规则是什么？","expected_intent":"FINANCE_KNOWLEDGE_QA"}
 {"suite":"routing","name":"bank_receipt_policy_routes_to_qa","chat_id":"routing-2","content":"工商银行转账回单什么时候可以下载？","expected_intent":"FINANCE_KNOWLEDGE_QA"}
+{"suite":"routing","name":"account_balance_routes_to_data_agent","chat_id":"routing-3","content":"query account balance for ACC-001","expected_intent":"TREASURY_DATA_QUERY"}
+{"suite":"routing","name":"transfer_order_routes_to_operation_agent","chat_id":"routing-4","content":"create transfer order from ACC-001 to ACC-002","expected_intent":"TREASURY_OPERATION"}
