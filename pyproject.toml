@@ -15,6 +15,7 @@ dependencies = [
     "pydantic-settings>=2.7,<3",
     "langgraph>=0.2.60,<1",
     "httpx>=0.28,<1",
+    "cryptography>=44,<47",
     "pymysql>=1.1,<2",
     "prompt-toolkit>=3.0,<4",
     "rich>=13.9,<15",

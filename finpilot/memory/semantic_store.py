@@ -6,9 +6,10 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from finpilot.config import settings
+from finpilot.memory.crypto import MemoryCipher
 from finpilot.memory.models import SemanticMemoryItem, SemanticMemoryRecord
 from finpilot.rag.embeddings import OllamaEmbeddingClient
-from finpilot.rag.vector_store import ChromaVectorStore
+from finpilot.rag.vector_store import ChromaVectorStore, cosine_score
 
 MEMORY_FRAGMENT_SPLIT_RE = re.compile(r"[\r\n]+|[;.]+")
 MEMORY_FRAGMENT_PREFIX_RE = re.compile(r"^\s*(?:[-*]\s*)?(?:memory|remember)\s*[:]?\s*")
@@ -19,12 +20,19 @@ class ChromaSemanticMemoryStore:
         self,
         embedding_client: OllamaEmbeddingClient | None = None,
         vector_store: ChromaVectorStore | None = None,
+        cipher: MemoryCipher | None = None,
     ):
         self.embedding_client = embedding_client or OllamaEmbeddingClient()
+        self.cipher = cipher
         self.vector_store = vector_store or ChromaVectorStore(
             collection_name=settings.chroma_memory_collection,
             timeout_seconds=settings.memory_chroma_timeout_seconds,
         )
+
+    def _memory_cipher(self) -> MemoryCipher:
+        if self.cipher is None:
+            self.cipher = MemoryCipher.from_base64_key(settings.memory_encryption_key)
+        return self.cipher
 
     def search(self, user_id: str, query: str, limit: int) -> list[SemanticMemoryRecord]:
         if not settings.vector_enabled or not settings.memory_semantic_search_enabled or not query.strip():
@@ -70,7 +78,7 @@ class ChromaSemanticMemoryStore:
             "memoryType": "semantic",
             "status": "ACTIVE",
             "confidence": confidence,
-            "evidence": item.evidence or "",
+            "evidence": self._memory_cipher().encrypt_text(item.evidence) if item.evidence else "",
             "createdAt": existing.updated_at.isoformat() if existing and existing.updated_at else now.isoformat(),
             "updatedAt": now.isoformat(),
             "observedAt": now.isoformat(),
@@ -79,7 +87,7 @@ class ChromaSemanticMemoryStore:
         self.vector_store.upsert_chunks(
             ids=[self.memory_vector_id(user_id, item.memory_key)],
             embeddings=[embedding],
-            texts=[merged_value],
+            texts=[self._memory_cipher().encrypt_text(merged_value)],
             metadatas=[metadata],
         )
         return SemanticMemoryRecord(
@@ -187,10 +195,10 @@ class ChromaSemanticMemoryStore:
             if metadata.get("recordType") != "user_memory" or metadata.get("status") != "ACTIVE":
                 continue
             distance = float(distances[index]) if index < len(distances) else 0.0
-            score = max(0.0, 1.0 - distance)
+            score = cosine_score(distance)
             if score < settings.memory_semantic_min_score:
                 continue
-            records.append(self._record_from_payload(text, metadata))
+            records.append(self._record_from_payload(text, metadata, distance=distance))
         return records
 
     def _get_payload_to_records(self, payload: dict[str, Any]) -> list[SemanticMemoryRecord]:
@@ -203,7 +211,13 @@ class ChromaSemanticMemoryStore:
                 records.append(self._record_from_payload(text, metadata))
         return records
 
-    def _record_from_payload(self, text: Any, metadata: dict[str, Any]) -> SemanticMemoryRecord:
+    def _record_from_payload(
+        self,
+        text: Any,
+        metadata: dict[str, Any],
+        *,
+        distance: float | None = None,
+    ) -> SemanticMemoryRecord:
         updated_at = None
         updated_raw = metadata.get("updatedAt")
         if isinstance(updated_raw, str) and updated_raw:
@@ -213,9 +227,15 @@ class ChromaSemanticMemoryStore:
                 updated_at = None
         return SemanticMemoryRecord(
             memory_key=str(metadata.get("memoryKey") or ""),
-            memory_value=str(text or ""),
+            memory_value=self._memory_cipher().decrypt_text(str(text or "")),
             confidence=float(metadata.get("confidence") or 0.0),
-            evidence=str(metadata.get("evidence") or "") or None,
+            evidence=(
+                self._memory_cipher().decrypt_text(str(metadata.get("evidence")))
+                if metadata.get("evidence")
+                else None
+            ),
             updated_at=updated_at,
+            score=cosine_score(distance) if distance is not None else None,
+            distance=distance,
         )
 

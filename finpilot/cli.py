@@ -35,7 +35,7 @@ from finpilot.config import settings
 from finpilot.agent.tooling.file_access import FileAccessStore
 from finpilot.context.compression import DEFAULT_CONTEXT_POLICIES, estimate_tokens
 from finpilot.memory.models import ChatSessionSummary, ChatTurn
-from finpilot.memory.service import MAX_STORED_MESSAGES, RECENT_MESSAGE_LIMIT
+from finpilot.memory.service import RECENT_MESSAGE_LIMIT
 from finpilot.memory.stores import AgentChatMemoryStore
 from finpilot.models import AgentChatResponse
 from finpilot.readiness import check_runtime_readiness
@@ -80,8 +80,10 @@ app = typer.Typer(
 )
 knowledge_app = typer.Typer(help="Manage shared FinPilot knowledge resources.", rich_markup_mode=None)
 tools_app = typer.Typer(help="Manage FinPilot agent tools.", rich_markup_mode=None)
+chroma_app = typer.Typer(help="Manage FinPilot Chroma collections.", rich_markup_mode=None)
 app.add_typer(knowledge_app, name="knowledge")
 app.add_typer(tools_app, name="tools")
+app.add_typer(chroma_app, name="chroma")
 
 
 def _default_service_factory(
@@ -309,6 +311,43 @@ def render_tools() -> None:
     for card in registry.list_tools():
         table.add_row(card.name, card.description)
     console.print(table)
+
+
+@chroma_app.command("migrate-v2")
+def migrate_chroma_v2(
+    rag_source: str = typer.Option("finance-knowledge-bge-m3-v1", help="Source RAG collection."),
+    rag_target: str = typer.Option("finance-knowledge-bge-m3-v2", help="Target cosine RAG collection."),
+    memory_source: str = typer.Option("finance-user-memory-bge-m3-v1", help="Source memory collection."),
+    memory_target: str = typer.Option("finance-user-memory-bge-m3-v2", help="Target cosine memory collection."),
+    batch_size: int = typer.Option(100, min=1, max=1000, help="Records per migration batch."),
+) -> None:
+    from finpilot.memory.crypto import MemoryCipher
+    from finpilot.rag.chroma_migration import ChromaCollectionMigrator, memory_encryption_transform
+    from finpilot.rag.vector_store import ChromaVectorStore
+
+    cipher = MemoryCipher.from_base64_key(settings.memory_encryption_key)
+    migrator = ChromaCollectionMigrator()
+    rag_result = migrator.migrate(
+        ChromaVectorStore(collection_name=rag_source, required_space=None, create_if_missing=False),
+        ChromaVectorStore(collection_name=rag_target),
+        batch_size=batch_size,
+    )
+
+    memory_result = migrator.migrate(
+        ChromaVectorStore(collection_name=memory_source, required_space=None, create_if_missing=False),
+        ChromaVectorStore(collection_name=memory_target),
+        batch_size=batch_size,
+        transform=memory_encryption_transform(cipher),
+    )
+    typer.echo(
+        json.dumps(
+            {
+                "rag": {"read": rag_result.read_count, "written": rag_result.write_count},
+                "memory": {"read": memory_result.read_count, "written": memory_result.write_count},
+            },
+            ensure_ascii=False,
+        )
+    )
 
 
 def _tool_access_store() -> FileAccessStore:
@@ -594,7 +633,7 @@ def _build_status_snapshot(user_id: str, chat_id: str, debug: bool) -> dict[str,
         "messages": messages,
         "message_count": len(messages),
         "visible_message_count": min(len(messages), RECENT_MESSAGE_LIMIT),
-        "max_stored_messages": MAX_STORED_MESSAGES,
+        "max_stored_messages": "append-only",
         "load_error": load_error,
         "estimated_tokens": estimated_tokens,
         "model_context_window": model_window,
@@ -863,7 +902,7 @@ def _list_chat_sessions(user_id: str, limit: int) -> list[ChatSessionSummary]:
 
 
 def _load_chat_messages(user_id: str, chat_id: str) -> list[ChatTurn]:
-    return chat_store_factory().get_messages(_memory_id(user_id, chat_id))
+    return chat_store_factory().get_messages(user_id, chat_id, 200)
 
 
 def _memory_id(user_id: str, chat_id: str) -> str:

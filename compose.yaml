@@ -34,7 +34,9 @@ services:
       CHROMA_BASE_URL: http://100.92.110.54:8000
       CHROMA_TENANT: default_tenant
       CHROMA_DATABASE: default_database
-      CHROMA_FINANCE_COLLECTION: finance-knowledge-bge-m3-v1
+      CHROMA_FINANCE_COLLECTION: finance-knowledge-bge-m3-v2
+      CHROMA_MEMORY_COLLECTION: finance-user-memory-bge-m3-v2
+      MEMORY_ENCRYPTION_KEY: ${MEMORY_ENCRYPTION_KEY:-}
       VECTOR_MIN_SCORE: 0.45
       VECTOR_ENABLED: "true"
       TITLE_CONFLICT_ENABLED: "true"

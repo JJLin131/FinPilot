@@ -44,7 +44,6 @@ DEFAULT_CONTEXT_POLICIES: dict[str, ContextPolicy] = {
             "loop.old_step_history",
             "session.recent_messages",
             "session.semantic_memory",
-            "session.long_term_memory",
         ],
     ),
     "finance_qa_agent": ContextPolicy(
@@ -62,7 +61,6 @@ DEFAULT_CONTEXT_POLICIES: dict[str, ContextPolicy] = {
             "loop.old_step_history",
             "session.recent_messages",
             "session.semantic_memory",
-            "session.long_term_memory",
         ],
     ),
 }
@@ -145,8 +143,6 @@ class ContextBuilder:
             return _limit_list(payload, ["session", "recent_messages"], 4, 500, action, events)
         if action == "session.semantic_memory":
             return _limit_list(payload, ["session", "semantic_memory"], 5, 400, action, events)
-        if action == "session.long_term_memory":
-            return _limit_list(payload, ["session", "long_term_memory"], 5, 400, action, events)
         return _compress_top_level(payload, action, events)
 
     def _enforce_segment_limits(

@@ -5,7 +5,7 @@ import logging
 import re
 
 from finpilot.context.builders import (
-    build_answer_prompt_context,
+    build_answer_prompt_bundle,
     build_loop_prompt_bundle,
     build_session_context,
     init_loop_context,
@@ -23,6 +23,7 @@ from finpilot.models import (
     LoopContext,
     LoopStepRecord,
     RagMatch,
+    SessionContext,
     SubAgentContext,
     ToolObservation,
 )
@@ -247,10 +248,16 @@ class AgentRuntime:
             return
         snippets = [match.text for match in state.reranked_docs[:3]]
         snippets.extend(self._content_snippets(loop_context))
-        answer_context = build_answer_prompt_context(build_session_context(state), subagent_context, loop_context)
-        if answer_context.get("long_term_memory"):
-            snippets.append(json.dumps({"long_term_memory": answer_context["long_term_memory"]}, ensure_ascii=False))
-        state.final_answer = self.answering_service.answer_with_context(state.user_message, snippets)
+        answer_bundle = build_answer_prompt_bundle(build_session_context(state), subagent_context, loop_context)
+        state.context_usage["answer"] = answer_bundle.usage
+        state.context_compactions.extend(answer_bundle.compression_events)
+        session_context = SessionContext.model_validate(answer_bundle.payload["session"])
+        answer_loop = answer_bundle.payload["loop"]
+        state.final_answer = self.answering_service.answer_with_context(
+            session_context,
+            snippets,
+            list(answer_loop.get("working_notes") or []),
+        )
         consume = getattr(self.answering_service, "consume_issues", None)
         if callable(consume):
             state.issues.extend(consume())

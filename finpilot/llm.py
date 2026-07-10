@@ -8,7 +8,7 @@ import httpx
 from finpilot.config import settings
 from finpilot.intents import INTENT_ORDER
 from finpilot.issues import dependency_degraded_issue
-from finpilot.models import AgentIssue
+from finpilot.models import AgentIssue, SessionContext
 
 logger = logging.getLogger(__name__)
 
@@ -212,13 +212,31 @@ Context:
             timeout_seconds=settings.query_rewriter_timeout_seconds,
         )
 
-    def answer_with_context(self, query: str, context_chunks: list[str]) -> str:
+    def answer_with_context(
+        self,
+        session_context: SessionContext,
+        context_chunks: list[str],
+        working_notes: list[str],
+    ) -> str:
         self._issues = []
-        if not context_chunks:
+        session_payload = {
+            "recent_messages": session_context.recent_messages[-6:],
+            "structured_memory": session_context.structured_memory,
+            "semantic_memory": session_context.semantic_memory[-5:],
+        }
+        supporting_context = {
+            "session": session_payload,
+            "evidence": context_chunks[:5],
+            "working_notes": working_notes[-3:],
+        }
+        if not context_chunks and not any(session_payload.values()) and not working_notes:
             return "当前知识库没有命中足够相关的规则，请补充更具体的问题。"
         try:
             return self.client.generate(
-                self.PROMPT.format(query=query, context="\n\n".join(context_chunks[:3])),
+                self.PROMPT.format(
+                    query=session_context.user_message,
+                    context=json.dumps(supporting_context, ensure_ascii=False, indent=2),
+                ),
                 model_name=settings.ai_model_name,
             )
         except Exception as exc:
@@ -231,7 +249,9 @@ Context:
                     exc=exc,
                 )
             )
-            return f"根据当前知识库，优先参考以下内容：{context_chunks[0]}"
+            if context_chunks:
+                return f"根据当前知识库，优先参考以下内容：{context_chunks[0]}"
+            return "当前上下文已保留，但回答模型暂时不可用，请稍后重试。"
 
     def consume_issues(self) -> list[AgentIssue]:
         issues = list(self._issues)

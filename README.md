@@ -277,6 +277,31 @@ web/                  # product showcase frontend and shared visual assets
 | 请求被安全审查阻断 | 查看 `issues`、`safety_findings` 和审计记录；只在可信诊断环境使用 `X-Debug-Trace: true`。 |
 | eval 失败 | 先运行 `tests/test_eval_datasets.py` 检查 JSONL schema，再检查 intent、tool、safety、document id 预期。 |
 
+## 记忆加密与 Chroma
+
+短期会话、MySQL 结构化用户记忆和 Chroma 语义记忆均使用 AES-256-GCM 加密保存。生成 URL-safe Base64 密钥并写入运行环境的 `MEMORY_ENCRYPTION_KEY`：
+
+```powershell
+.\.venv\Scripts\python.exe -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"
+```
+
+密钥不得提交到 Git；密钥缺失或错误时 `/readyz` 会报告失败，已有密文也无法恢复。更换密钥前必须先完成数据重加密。
+
+从旧 collection 迁移到明确使用 cosine 距离的 v2 collection：
+
+```powershell
+finpilot chroma migrate-v2
+```
+
+命令保留 v1 collection，重新计算 BGE-M3 embedding，并将用户记忆以新随机密文写入 v2。迁移成功后可使用 Chroma 官方终端浏览器查看记录变化：
+
+```powershell
+chroma browse finance-user-memory-bge-m3-v2 --host http://localhost:8000
+chroma browse finance-knowledge-bge-m3-v2 --host http://localhost:8000
+```
+
+两类数据位于同一 Chroma database 的不同 collection，ID、索引和查询相互隔离。记忆的 document/evidence 在浏览器中显示为密文，Agent 加载时才会解密。
+
 ## 路线图
 
 - 接入真实财资后端：账户、余额、流水、回单、资金池、付款、转账、单据文件。

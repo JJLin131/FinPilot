@@ -49,10 +49,11 @@ class SemanticMemoryRecord(BaseModel):
     confidence: float = 0.0
     evidence: str | None = None
     updated_at: datetime | None = None
+    score: float | None = None
+    distance: float | None = None
 
 
 class MemoryContext(BaseModel):
     recent_messages: list[ChatTurn] = Field(default_factory=list)
     structured_memory: dict[str, Any] = Field(default_factory=dict)
     semantic_memory: list[SemanticMemoryRecord] = Field(default_factory=list)
-    long_term_memory: list[str] = Field(default_factory=list)

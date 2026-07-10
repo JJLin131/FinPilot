@@ -73,7 +73,6 @@ class SessionContext(BaseModel):
     recent_messages: list[dict[str, Any]] = Field(default_factory=list)
     structured_memory: dict[str, Any] = Field(default_factory=dict)
     semantic_memory: list[dict[str, Any]] = Field(default_factory=list)
-    long_term_memory: list[str] = Field(default_factory=list)
 
 
 class SubAgentContext(BaseModel):
@@ -144,6 +143,7 @@ class RagMatch(BaseModel):
     source: str
     text: str
     score: float
+    distance: float | None = None
 
 
 class EvalCase(BaseModel):
@@ -207,7 +207,6 @@ class GraphState(BaseModel):
     recent_messages: list[dict[str, Any]] = Field(default_factory=list)
     structured_memory: dict[str, Any] = Field(default_factory=dict)
     semantic_memory: list[dict[str, Any]] = Field(default_factory=list)
-    long_term_memory: list[str] = Field(default_factory=list)
     loop_count: int = 0
     stop_reason: str | None = None
     evidence_sufficient: bool = False

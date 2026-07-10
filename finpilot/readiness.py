@@ -6,6 +6,7 @@ import httpx
 from pydantic import BaseModel
 
 from finpilot.config import settings
+from finpilot.memory.crypto import MemoryCipher
 from finpilot.mysql import connect_runtime_mysql
 
 ReadinessStatus = Literal["ok", "degraded", "failed"]
@@ -30,6 +31,7 @@ def check_runtime_readiness() -> RuntimeReadiness:
         _check_optional_http("embedding", settings.vector_enabled, settings.embedding_base_url, ["/api/tags", "/"]),
         _check_optional_http("reranker", settings.reranker_enabled, settings.reranker_base_url, ["/healthz", "/"]),
         _check_llm_config(),
+        _check_memory_encryption(),
     ]
     return RuntimeReadiness(status=_overall_status(checks), checks=checks)
 
@@ -70,6 +72,42 @@ def _check_llm_config() -> ReadinessCheck:
         status="failed",
         detail=f"DEEPSEEK_API_KEY is not configured for {','.join(deepseek_features)}",
     )
+
+
+def _check_memory_encryption() -> ReadinessCheck:
+    try:
+        cipher = MemoryCipher.from_base64_key(settings.memory_encryption_key)
+    except ValueError as exc:
+        return ReadinessCheck(name="memory_encryption", status="failed", detail=str(exc))
+    try:
+        with connect_runtime_mysql() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    create table if not exists memory_encryption_key_check (
+                        id tinyint not null primary key,
+                        key_fingerprint char(64) not null,
+                        created_at datetime(6) not null
+                    )
+                    """
+                )
+                cursor.execute("select key_fingerprint from memory_encryption_key_check where id = 1")
+                row = cursor.fetchone()
+                if row and str(row[0]) != cipher.key_fingerprint:
+                    return ReadinessCheck(
+                        name="memory_encryption",
+                        status="failed",
+                        detail="MEMORY_ENCRYPTION_KEY does not match the persisted key fingerprint.",
+                    )
+                if not row:
+                    cursor.execute(
+                        "insert into memory_encryption_key_check(id, key_fingerprint, created_at) "
+                        "values (1, %s, current_timestamp(6))",
+                        (cipher.key_fingerprint,),
+                    )
+    except Exception as exc:
+        return ReadinessCheck(name="memory_encryption", status="failed", detail=_exception_detail(exc))
+    return ReadinessCheck(name="memory_encryption", status="ok", detail="AES-256-GCM key verified")
 
 
 def _check_optional_http(name: str, enabled: bool, base_url: str, paths: list[str]) -> ReadinessCheck:

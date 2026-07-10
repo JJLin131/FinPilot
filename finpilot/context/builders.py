@@ -21,7 +21,6 @@ def build_session_context(state: GraphState) -> SessionContext:
         recent_messages=state.recent_messages[-6:],
         structured_memory=dict(state.structured_memory),
         semantic_memory=state.semantic_memory[-8:],
-        long_term_memory=state.long_term_memory[-8:],
     )
 
 
@@ -71,20 +70,21 @@ def build_loop_prompt_bundle(
     )
 
 
-def build_answer_prompt_context(
+def build_answer_prompt_bundle(
     session_context: SessionContext,
     subagent_context: SubAgentContext,
     loop_context: LoopContext,
-) -> dict[str, Any]:
-    return {
-        "user_message": session_context.user_message,
-        "agent_goal": subagent_context.goal,
-        "evidence_sufficient": loop_context.evidence_sufficient,
-        "recent_messages": session_context.recent_messages[-4:],
-        "structured_memory": session_context.structured_memory,
-        "semantic_memory": session_context.semantic_memory[-5:],
-        "long_term_memory": session_context.long_term_memory[-5:],
+) -> PromptContextBundle:
+    answer_loop = {
         "working_notes": loop_context.working_notes[-3:],
         "step_history": [step.model_dump(mode="json") for step in loop_context.step_history[-2:]],
+        "evidence_sufficient": loop_context.evidence_sufficient,
     }
+    return _context_builder.build(
+        subagent_context.context_policy,
+        [
+            ContextSegment(name="session", value=session_context, priority=10),
+            ContextSegment(name="loop", value=answer_loop, priority=20),
+        ],
+    )
 

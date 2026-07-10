@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 import re
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, wait as wait_for_futures
+from threading import Lock
 from typing import Any
 
 from finpilot.config import settings
@@ -16,8 +17,7 @@ from finpilot.models import AgentChatResponse
 
 logger = logging.getLogger(__name__)
 
-RECENT_MESSAGE_LIMIT = 20
-MAX_STORED_MESSAGES = 80
+RECENT_MESSAGE_LIMIT = 6
 
 MEMORY_SIGNAL_TERMS = (
     "记住",
@@ -66,8 +66,7 @@ FORGET_SIGNAL_TERMS = (
 )
 UNSAFE_MEMORY_PATTERNS = (
     re.compile(r"\b(api[_-]?key|secret|password|token)\b", re.IGNORECASE),
-    re.compile(r"(密码|口令|密钥|验证码|身份证号|银行卡号|完整卡号|卡号)"),
-    re.compile(r"\b\d{15,19}\b"),
+    re.compile(r"(密码|口令|密钥|验证码|身份证号)"),
     re.compile(r"ignore (all )?(previous|prior) instructions", re.IGNORECASE),
     re.compile(r"(系统提示词|开发者消息|system prompt|developer message)", re.IGNORECASE),
 )
@@ -89,6 +88,9 @@ class MemoryManager:
         self.extractor = extractor or MemoryExtractor()
         self._executor: ThreadPoolExecutor | None = None
         self._owns_executor = False
+        self._closed = False
+        self._tail_lock = Lock()
+        self._user_tails: dict[str, Future] = {}
         if async_submitter is None:
             max_workers = max(1, settings.memory_extraction_max_workers)
             self._executor = extraction_executor or ThreadPoolExecutor(
@@ -96,19 +98,18 @@ class MemoryManager:
                 thread_name_prefix="memory-extract",
             )
             self._owns_executor = extraction_executor is None
-            self.async_submitter = self._submit_executor
+            self.async_submitter = self._submit_ordered_executor
         else:
             self.async_submitter = async_submitter
 
-    def load(self, memory_id: str, user_id: str, user_message: str = "") -> MemoryContext:
-        visible_messages = self._load_recent_messages(memory_id)
+    def load(self, user_id: str, chat_id: str, user_message: str = "") -> MemoryContext:
+        visible_messages = self._load_recent_messages(user_id, chat_id)
         structured_memory = self._load_profile(user_id)
         semantic_memory = self._load_semantic_memory(user_id, user_message)
         return MemoryContext(
             recent_messages=visible_messages[-RECENT_MESSAGE_LIMIT:],
             structured_memory=structured_memory,
             semantic_memory=semantic_memory,
-            long_term_memory=self._format_long_term_memory(structured_memory, semantic_memory),
         )
 
     def remember_interaction(
@@ -126,15 +127,14 @@ class MemoryManager:
         if response is None:
             raise ValueError("response is required.")
         if response.status not in {"FAILED", "UNSUPPORTED"} and response.route.normalized_intent != "UNKNOWN":
-            messages = self._load_recent_messages(memory_id)
-            messages.extend(
-                [
-                    ChatTurn(role="user", content=user_message),
-                    ChatTurn(role="assistant", content=response.answer),
-                ]
-            )
             try:
-                self.chat_store.update_messages(memory_id, messages[-MAX_STORED_MESSAGES:])
+                self.chat_store.append_interaction(
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    request_id=response.request_id,
+                    user_content=user_message,
+                    assistant_content=response.answer,
+                )
             except Exception as exc:
                 logger.warning("Short-term chat memory write failed for %s: %s", memory_id, exc)
         self._schedule_long_term_memory(user_id, chat_id, user_message, response)
@@ -169,6 +169,9 @@ class MemoryManager:
         user_message: str,
         response: AgentChatResponse,
     ) -> None:
+        if self._closed:
+            logger.warning("Long-term memory extraction rejected because the manager is shut down.")
+            return
         if not self._should_extract_long_term_memory(user_message, response):
             return
         self.async_submitter(self._extract_and_store_long_term_memory, user_id, chat_id, user_message, response)
@@ -192,11 +195,11 @@ class MemoryManager:
         except Exception as exc:
             logger.warning("Long-term memory extraction/write failed for user %s: %s", user_id, exc)
 
-    def _load_recent_messages(self, memory_id: str) -> list[ChatTurn]:
+    def _load_recent_messages(self, user_id: str, chat_id: str) -> list[ChatTurn]:
         try:
-            return self._agent_visible_messages(self.chat_store.get_messages(memory_id))
+            return self._agent_visible_messages(self.chat_store.get_messages(user_id, chat_id, RECENT_MESSAGE_LIMIT))
         except Exception as exc:
-            logger.warning("Short-term chat memory load failed for %s: %s", memory_id, exc)
+            logger.warning("Short-term chat memory load failed for %s/%s: %s", user_id, chat_id, exc)
             return []
 
     def _load_profile(self, user_id: str) -> dict[str, Any]:
@@ -286,32 +289,56 @@ class MemoryManager:
     def _contains_unsafe_memory_text(self, text: str) -> bool:
         return any(pattern.search(text) for pattern in UNSAFE_MEMORY_PATTERNS)
 
-    def _format_long_term_memory(
-        self,
-        structured_memory: dict[str, Any],
-        semantic_memory: list[SemanticMemoryRecord],
-    ) -> list[str]:
-        values: list[str] = []
-        if structured_memory:
-            values.append(
-                "Structured user profile: "
-                + "; ".join(f"{field}={value}" for field, value in structured_memory.items() if value is not None)
-            )
-        for item in semantic_memory:
-            if item.memory_key and item.memory_value:
-                values.append(f"{item.memory_key}: {item.memory_value}")
-        return values
-
-    def _submit_executor(self, call, *args) -> None:
+    def _submit_ordered_executor(self, call, *args) -> None:
+        if self._closed:
+            logger.warning("Long-term memory extraction rejected because the manager is shut down.")
+            return
         if self._executor is None:
-            call(*args)
+            logger.warning("Long-term memory extraction rejected because the executor is unavailable.")
+            return
+        user_id = str(args[0])
+        chained: Future = Future()
+        with self._tail_lock:
+            previous = self._user_tails.get(user_id)
+            self._user_tails[user_id] = chained
+
+        def launch(_previous=None) -> None:
+            self._launch_ordered_task(chained, call, args)
+
+        if previous is None:
+            launch()
+        else:
+            previous.add_done_callback(launch)
+        chained.add_done_callback(lambda future: self._finish_ordered_task(user_id, future))
+
+    def _launch_ordered_task(self, chained: Future, call, args: tuple) -> None:
+        if self._executor is None:
+            if not chained.done():
+                chained.set_exception(RuntimeError("Memory extraction executor is not available."))
             return
         try:
-            future = self._executor.submit(call, *args)
+            worker = self._executor.submit(call, *args)
         except RuntimeError as exc:
-            logger.warning("Long-term memory extraction schedule failed: %s", exc)
+            chained.set_exception(exc)
             return
-        future.add_done_callback(self._log_background_failure)
+
+        def complete(worker_future: Future) -> None:
+            if worker_future.cancelled():
+                chained.cancel()
+                return
+            error = worker_future.exception()
+            if error is not None:
+                chained.set_exception(error)
+            else:
+                chained.set_result(worker_future.result())
+
+        worker.add_done_callback(complete)
+
+    def _finish_ordered_task(self, user_id: str, future: Future) -> None:
+        with self._tail_lock:
+            if self._user_tails.get(user_id) is future:
+                self._user_tails.pop(user_id, None)
+        self._log_background_failure(future)
 
     def _log_background_failure(self, future: Future) -> None:
         if future.cancelled():
@@ -325,6 +352,12 @@ class MemoryManager:
             logger.warning("Long-term memory extraction task failed: %s", exc)
 
     def shutdown(self, wait: bool = True, cancel_futures: bool = False) -> None:
+        self._closed = True
+        if wait:
+            with self._tail_lock:
+                tails = list(self._user_tails.values())
+            if tails:
+                wait_for_futures(tails)
         if self._owns_executor and self._executor is not None:
             self._executor.shutdown(wait=wait, cancel_futures=cancel_futures)
             self._executor = None

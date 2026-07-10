@@ -48,8 +48,8 @@ class Settings(BaseSettings):
     chroma_base_url: str = "http://100.92.110.54:8000"
     chroma_tenant: str = "default_tenant"
     chroma_database: str = "default_database"
-    chroma_finance_collection: str = "finance-knowledge-bge-m3-v1"
-    chroma_memory_collection: str = "finance-user-memory-bge-m3-v1"
+    chroma_finance_collection: str = "finance-knowledge-bge-m3-v2"
+    chroma_memory_collection: str = "finance-user-memory-bge-m3-v2"
     vector_min_score: float = 0.45
     vector_enabled: bool = True
     memory_extraction_enabled: bool = True
@@ -62,9 +62,7 @@ class Settings(BaseSettings):
     memory_semantic_merge_similarity_threshold: float = 0.93
     memory_chroma_timeout_seconds: int = 3
     memory_extraction_max_workers: int = 2
-    memory_extraction_retry_limit: int = 3
-    memory_extraction_recover_on_startup: bool = True
-    memory_extraction_recover_limit: int = 20
+    memory_encryption_key: str = ""
     title_conflict_enabled: bool = True
     title_conflict_min_score: float = 0.82
     title_conflict_search_limit: int = 8

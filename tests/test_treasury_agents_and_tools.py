@@ -38,7 +38,7 @@ class RecordingAnsweringService:
     def __init__(self):
         self.snippets: list[str] = []
 
-    def answer_with_context(self, question: str, snippets: list[str]) -> str:
+    def answer_with_context(self, session_context, snippets: list[str], working_notes: list[str]) -> str:
         self.snippets = snippets
         return "answer from treasury mock"
 

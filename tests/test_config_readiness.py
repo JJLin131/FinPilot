@@ -124,8 +124,11 @@ def test_check_runtime_readiness_combines_component_statuses(monkeypatch, tmp_pa
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def execute(self, sql: str) -> None:
+        def execute(self, sql: str, params=None) -> None:
             self.sql = sql
+
+        def fetchone(self):
+            return None
 
     class FakeConnection:
         def __enter__(self):
@@ -147,6 +150,11 @@ def test_check_runtime_readiness_combines_component_statuses(monkeypatch, tmp_pa
     )
     monkeypatch.setattr(readiness.settings, "bm25_index_path", index_path)
     monkeypatch.setattr(readiness.settings, "deepseek_api_key", "sk-test")
+    monkeypatch.setattr(
+        readiness.settings,
+        "memory_encryption_key",
+        "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+    )
 
     result = readiness.check_runtime_readiness()
 
@@ -158,6 +166,7 @@ def test_check_runtime_readiness_combines_component_statuses(monkeypatch, tmp_pa
         "embedding": "ok",
         "reranker": "ok",
         "llm_config": "ok",
+        "memory_encryption": "ok",
     }
 
 
@@ -171,8 +180,11 @@ def test_check_runtime_readiness_marks_disabled_optional_dependencies_ok(monkeyp
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def execute(self, sql: str) -> None:
+        def execute(self, sql: str, params=None) -> None:
             self.sql = sql
+
+        def fetchone(self):
+            return None
 
     class FakeConnection:
         def __enter__(self):
@@ -189,6 +201,11 @@ def test_check_runtime_readiness_marks_disabled_optional_dependencies_ok(monkeyp
     monkeypatch.setattr(readiness, "connect_runtime_mysql", lambda: FakeConnection())
     monkeypatch.setattr(readiness.settings, "bm25_index_path", index_path)
     monkeypatch.setattr(readiness.settings, "deepseek_api_key", "sk-test")
+    monkeypatch.setattr(
+        readiness.settings,
+        "memory_encryption_key",
+        "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+    )
     monkeypatch.setattr(readiness.settings, "vector_enabled", False)
     monkeypatch.setattr(readiness.settings, "reranker_enabled", False)
 
@@ -197,6 +214,56 @@ def test_check_runtime_readiness_marks_disabled_optional_dependencies_ok(monkeyp
     assert result.status == "ok"
     assert next(check for check in result.checks if check.name == "chroma").detail == "disabled"
     assert next(check for check in result.checks if check.name == "reranker").detail == "disabled"
+
+
+def test_memory_encryption_readiness_fails_when_key_is_missing(monkeypatch):
+    import finpilot.readiness as readiness
+
+    monkeypatch.setattr(readiness.settings, "memory_encryption_key", "")
+
+    result = readiness._check_memory_encryption()
+
+    assert result.status == "failed"
+    assert "MEMORY_ENCRYPTION_KEY" in result.detail
+
+
+def test_memory_encryption_readiness_rejects_key_that_does_not_match_persisted_fingerprint(monkeypatch):
+    import finpilot.readiness as readiness
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql, params=None):
+            self.sql = sql
+
+        def fetchone(self):
+            return ("different-key-fingerprint",)
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return Cursor()
+
+    monkeypatch.setattr(
+        readiness.settings,
+        "memory_encryption_key",
+        "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+    )
+    monkeypatch.setattr(readiness, "connect_runtime_mysql", lambda: Connection())
+
+    result = readiness._check_memory_encryption()
+
+    assert result.status == "failed"
+    assert "does not match" in result.detail
 
 
 def test_check_runtime_readiness_marks_failed_for_required_dependency(monkeypatch):
