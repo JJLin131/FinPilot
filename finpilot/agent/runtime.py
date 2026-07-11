@@ -16,7 +16,6 @@ from finpilot.agent.decision import AgentDecisionService
 from finpilot.agent.prompts import build_agent_decision_prompt
 from finpilot.agent.tools import ToolRegistry
 from finpilot.config import settings
-from finpilot.llm import FinanceAnsweringService
 from finpilot.models import (
     AgentDecision,
     AgentEvidence,
@@ -26,6 +25,7 @@ from finpilot.models import (
     LoopStepRecord,
     RagMatch,
     SubAgentContext,
+    SubAgentResult,
     ToolObservation,
 )
 from finpilot.safety.models import SafetyFinding
@@ -39,12 +39,32 @@ class AgentRuntime:
     def __init__(
         self,
         decision_service: AgentDecisionService | None = None,
-        answering_service: FinanceAnsweringService | None = None,
+        answering_service=None,
     ):
         self.decision_service = decision_service or AgentDecisionService()
-        self.answering_service = answering_service or FinanceAnsweringService()
+        # 最终回答已上移到图级节点，保留参数仅兼容已有构造调用。
+        self.answering_service = answering_service
 
     def run(self, state: GraphState, subagent_context: SubAgentContext, tools: ToolRegistry) -> GraphState:
+        self.execute(
+            state,
+            subagent_context,
+            tools,
+            node_id=subagent_context.agent_name,
+            task=subagent_context.assigned_task or state.user_message,
+        )
+        return state
+
+    def execute(
+        self,
+        state: GraphState,
+        subagent_context: SubAgentContext,
+        tools: ToolRegistry,
+        *,
+        node_id: str,
+        task: str,
+    ) -> SubAgentResult:
+        subagent_context = subagent_context.model_copy(update={"assigned_task": task})
         session_context = build_session_context(state)
         loop_context = init_loop_context(state, subagent_context)
         summary_cache: dict[str, object] = {}
@@ -85,10 +105,8 @@ class AgentRuntime:
         if loop_context.stop_reason is None:
             loop_context.stop_reason = "max_steps"
 
-        self._compose_final_answer(state, subagent_context, loop_context, summary_cache=summary_cache)
         self._sync_loop_state(state, loop_context)
-        self._sync_global_context(state, subagent_context, loop_context, summary_cache=summary_cache)
-        return state
+        return self._build_execution_result(state, subagent_context, loop_context, node_id=node_id, task=task)
 
     def _decide(
         self,
@@ -263,6 +281,55 @@ class AgentRuntime:
                 )
             )
 
+    def _build_execution_result(
+        self,
+        state: GraphState,
+        subagent_context: SubAgentContext,
+        loop_context: LoopContext,
+        *,
+        node_id: str,
+        task: str,
+    ) -> SubAgentResult:
+        observations = [step.observation for step in loop_context.step_history if step.observation is not None]
+        status = "SUCCEEDED"
+        failure_reason = None
+        if state.final_answer == CONTEXT_BUDGET_EXCEEDED_ANSWER:
+            status = "FAILED"
+            failure_reason = CONTEXT_BUDGET_EXCEEDED_ANSWER
+        elif any(observation.status == "BLOCKED" for observation in observations):
+            status = "BLOCKED"
+            failure_reason = next(observation.summary for observation in observations if observation.status == "BLOCKED")
+        elif observations and all(observation.status == "FAILED" for observation in observations):
+            status = "FAILED"
+            failure_reason = observations[-1].summary
+
+        summary = loop_context.draft_answer or (observations[-1].summary if observations else loop_context.stop_reason or "")
+        output = self._safe_result_output(observations[-1].output if observations else {})
+        raw_evidence = [match.model_dump(mode="json") for match in state.reranked_docs]
+        raw_evidence.extend(self._content_evidence(loop_context))
+        return SubAgentResult(
+            node_id=node_id,
+            agent_name=subagent_context.agent_name,
+            task=task,
+            status=status,
+            summary=summary,
+            output=output,
+            evidence_summary=[item.model_dump(mode="json") for item in state.evidence],
+            failure_reason=failure_reason,
+            raw_evidence=raw_evidence,
+        )
+
+    @staticmethod
+    def _safe_result_output(output: dict) -> dict:
+        if not isinstance(output, dict):
+            return {}
+        # 原始文档和文件/网页正文只在当前请求 Answer 阶段保留。
+        return {
+            key: value
+            for key, value in output.items()
+            if key not in {"documents", "content", "issues", "safety"}
+        }
+
     def _compose_final_answer(
         self,
         state: GraphState,
@@ -277,8 +344,6 @@ class AgentRuntime:
         evidence.extend(self._content_evidence(loop_context))
         answer_bundle = build_answer_prompt_bundle(
             build_session_context(state),
-            subagent_context,
-            loop_context,
             evidence,
             summary_cache=summary_cache,
         )
@@ -386,25 +451,17 @@ class AgentRuntime:
         summary_cache: dict[str, object] | None = None,
     ) -> None:
         subagent_results = [
-            {
-                "agent_name": subagent_context.agent_name,
-                "final_result": state.final_answer,
-                "evidence_summary": [item.model_dump(mode="json") for item in state.evidence],
-                "step_summary": [
-                    {
-                        "step_index": step.step_index,
-                        "decision": step.decision.decision,
-                        "tool_name": step.decision.tool_name,
-                        "status": step.observation.status if step.observation else None,
-                        "summary": step.observation.summary if step.observation else None,
-                    }
-                    for step in loop_context.step_history
-                ],
-            }
+            self._build_execution_result(
+                state,
+                subagent_context,
+                loop_context,
+                node_id=subagent_context.agent_name,
+                task=subagent_context.assigned_task or state.user_message,
+            )
         ]
+        state.subagent_results.extend(subagent_results)
         bundle = build_global_prompt_bundle(
             state,
-            subagent_results=subagent_results,
             summary_cache=summary_cache,
         )
         self._record_context_bundle(state, "global", bundle, append=True)

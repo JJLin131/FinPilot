@@ -5,6 +5,7 @@ import json
 import pytest
 
 from finpilot.agent.runtime import AgentRuntime
+from finpilot.context.builders import build_answer_prompt_bundle
 from finpilot.context.compression import CompressionRule, ContextBuilder, ContextPolicy, ContextSegment
 from finpilot.models import (
     AgentDecision,
@@ -492,3 +493,31 @@ def test_compression_rule_rejects_unsupported_path():
             method="llm",
             target_tokens=100,
         )
+
+
+def test_answer_bundle_uses_global_answer_policy_without_loop_context():
+    session = SessionContext(
+        user_id="user-1",
+        chat_id="chat-1",
+        memory_id="memory-1",
+        user_message="根据证据回答",
+        normalized_intent="FINANCE_KNOWLEDGE_QA",
+        target_agent="QueryAgent",
+        subagent_results=[
+            {
+                "node_id": "knowledge",
+                "agent_name": "QueryAgent",
+                "task": "检索规则",
+                "status": "SUCCEEDED",
+                "summary": "命中规则",
+            }
+        ],
+    )
+
+    bundle = build_answer_prompt_bundle(session, [{"source": "manual", "text": "证据正文"}])
+
+    assert bundle.usage.effective_policy == "answer_default"
+    assert bundle.usage.stage == "answer"
+    assert bundle.payload["session"]["subagent_results"][0]["summary"] == "命中规则"
+    assert bundle.payload["evidence"][0]["text"] == "证据正文"
+    assert "loop" not in bundle.payload

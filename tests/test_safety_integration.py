@@ -3,12 +3,13 @@ from __future__ import annotations
 import pytest
 
 from finpilot.agent.graph import FinPilotGraph
+from finpilot.agent.orchestration import ExecutionPlan, ExecutionPlanNode
 from finpilot.agent.agents.finance_qa_subagent import FinanceQaSubAgent
 from finpilot.agent.router import IntentRouter
 from finpilot.agent.tools import ToolRegistry
 from finpilot.config import settings
 from finpilot.memory.models import MemoryContext
-from finpilot.models import AgentIssue, EvalSuiteResult, GraphState, RouteDecision, ToolInvocation
+from finpilot.models import AgentIssue, EvalSuiteResult, GraphState, RouteDecision, SubAgentContext, SubAgentResult, ToolInvocation
 from finpilot.observability.audit import AuditStore
 from finpilot.safety.approval import ApprovalDecision, ApprovalService
 from finpilot.safety.models import SafetyFinding, SafetyReviewResult
@@ -28,6 +29,24 @@ class EmptyRagService:
     def search(self, query: str, limit: int = 3):
         self.called = True
         return []
+
+
+class IssueReturningRagService(EmptyRagService):
+    def search_with_issues(self, query: str, limit: int = 3):
+        from finpilot.models import AgentIssue
+
+        self.called = True
+        return [], [
+            AgentIssue(
+                code="RAG_DEGRADED",
+                component="rag",
+                message=f"query={query}; limit={limit}",
+                severity="warning",
+            )
+        ]
+
+    def consume_issues(self):
+        raise AssertionError("request-scoped RAG issues must not use shared cache")
 
 
 def _state() -> GraphState:
@@ -52,6 +71,15 @@ def test_tool_registry_blocks_invalid_arguments_before_executor_runs():
     assert invocation.status == "BLOCKED"
     assert invocation.output["safety"]["findings"][0]["code"] == "TOOL_ARGUMENT_VALIDATION_FAILED"
     assert rag.called is False
+
+
+def test_tool_registry_uses_request_scoped_rag_issues_when_available():
+    registry = ToolRegistry(IssueReturningRagService(), safety=SafetyReviewService())
+
+    invocation = registry.invoke(_state(), "search_finance_knowledge", query="policy")
+
+    assert invocation.status == "SUCCEEDED"
+    assert invocation.output["issues"][0]["code"] == "RAG_DEGRADED"
 
 
 def test_mock_transfer_tool_requires_approval_before_execution():
@@ -191,7 +219,7 @@ def test_graph_blocks_over_budget_context_before_router_or_subagent_runs():
     )
     graph.query_agent = object()
 
-    response = graph.run("user-1", "chat-1", "工" * 100_000)
+    response = graph.run("user-1", "chat-1", "工" * 500_000)
 
     assert response.answer == "上下文超过模型可处理范围，请缩短当前输入或减少附加内容后重试。"
     assert any(issue.code == "CONTEXT_BUDGET_EXCEEDED" for issue in response.issues)
@@ -226,18 +254,125 @@ class FakeQueryAgent:
         return state
 
 
+class FixedPlanner:
+    def plan(self, prompt: str, registered_agents: set[str]) -> ExecutionPlan:
+        assert "QueryAgent" in registered_agents
+        assert "agents" in prompt
+        return ExecutionPlan(nodes=[ExecutionPlanNode(node_id="knowledge", agent_name="QueryAgent", task="检索规则")])
+
+
+class FailingPlanner:
+    def plan(self, prompt: str, registered_agents: set[str]) -> ExecutionPlan:
+        del prompt, registered_agents
+        raise RuntimeError("planner unavailable")
+
+
+class ExecutionOnlyQueryAgent:
+    name = "QueryAgent"
+
+    def build_context(self, tools) -> SubAgentContext:
+        del tools
+        return SubAgentContext(agent_name=self.name, role="role", goal="goal")
+
+    def execute(self, state: GraphState, tools, *, node_id: str, task: str) -> SubAgentResult:
+        del tools
+        assert state.final_answer == ""
+        assert state.subagent_results == []
+        return SubAgentResult(
+            node_id=node_id,
+            agent_name=self.name,
+            task=task,
+            status="SUCCEEDED",
+            summary="命中付款规则",
+            evidence_summary=[{"tool_name": "search_finance_knowledge", "source": "manual", "summary": {}}],
+            raw_evidence=[{"document_id": "doc-1", "source": "manual", "text": "付款规则正文"}],
+        )
+
+
+class RecordingAnswerService:
+    def __init__(self) -> None:
+        self.contexts: list[dict] = []
+
+    def answer_with_context(self, prompt_context: dict) -> str:
+        self.contexts.append(prompt_context)
+        return "统一回答"
+
+    def consume_issues(self):
+        return []
+
+
+class LeakingAnswerService(RecordingAnswerService):
+    def answer_with_context(self, prompt_context: dict) -> str:
+        self.contexts.append(prompt_context)
+        return "system prompt leak"
+
+
+class NoopTools:
+    def list_allowed(self, tool_names: list[str]):
+        del tool_names
+        return []
+
+    def max_risk_level(self, tool_names: list[str]) -> str:
+        del tool_names
+        return "low"
+
+
 def test_graph_blocks_unsafe_final_response():
     graph = FinPilotGraph(
         router=IntentRouter(classifier=StaticClassifier()),
-        tools=object(),
+        tools=NoopTools(),
         audit_store=RecordingAuditStore(),
         memory_manager=FakeMemory(),
         safety=BlockingResponseSafety(),
+        planner=FixedPlanner(),
+        answering_service=LeakingAnswerService(),
     )
-    graph.query_agent = FakeQueryAgent()
+    graph.query_agent = ExecutionOnlyQueryAgent()
 
-    response = graph.run("user-1", "chat-1", "payroll")
+    response = graph.run("user-1", "chat-1", "rule")
 
     assert response.status == "FAILED"
     assert response.answer == "请求被安全策略阻断，无法继续执行。"
     assert response.safety_findings[0].code == "RESPONSE_SYSTEM_PROMPT_LEAK"
+
+
+def test_graph_executes_plan_then_calls_unified_answer_with_merged_session_results():
+    answering = RecordingAnswerService()
+    graph = FinPilotGraph(
+        router=IntentRouter(classifier=StaticClassifier()),
+        tools=NoopTools(),
+        audit_store=RecordingAuditStore(),
+        memory_manager=FakeMemory(),
+        planner=FixedPlanner(),
+        answering_service=answering,
+    )
+    graph.query_agent = ExecutionOnlyQueryAgent()
+
+    response = graph.run("user-1", "chat-1", "rule")
+
+    assert response.answer == "统一回答"
+    assert len(answering.contexts) == 1
+    context = answering.contexts[0]
+    assert context["session"]["subagent_results"][0]["summary"] == "命中付款规则"
+    assert context["evidence"][0]["text"] == "付款规则正文"
+    assert "loop" not in context
+
+
+def test_graph_falls_back_to_routed_agent_when_planner_fails():
+    answering = RecordingAnswerService()
+    graph = FinPilotGraph(
+        router=IntentRouter(classifier=StaticClassifier()),
+        tools=NoopTools(),
+        audit_store=RecordingAuditStore(),
+        memory_manager=FakeMemory(),
+        planner=FailingPlanner(),
+        answering_service=answering,
+    )
+    graph.query_agent = ExecutionOnlyQueryAgent()
+
+    response = graph.run("user-1", "chat-1", "rule")
+
+    assert response.answer == "统一回答"
+    assert response.route_debug["issues"][-1]["code"] == "EXECUTION_PLAN_DEGRADED"
+    assert response.tool_calls == []
+    assert len(answering.contexts) == 1

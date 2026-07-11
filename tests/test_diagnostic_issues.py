@@ -6,11 +6,21 @@ import httpx
 import pytest
 
 from finpilot.agent.graph import FinPilotGraph
+from finpilot.agent.orchestration import ExecutionPlan, ExecutionPlanNode
 from finpilot.agent.router import IntentRouter
 from finpilot.config import settings
 from finpilot.memory.models import MemoryContext
 from finpilot.memory.service import MemoryManager
-from finpilot.models import AgentChatResponse, AgentEvidence, AgentIssue, EvalSuiteResult, GraphState, RouteDecision
+from finpilot.models import (
+    AgentChatResponse,
+    AgentEvidence,
+    AgentIssue,
+    EvalSuiteResult,
+    GraphState,
+    RouteDecision,
+    SubAgentContext,
+    SubAgentResult,
+)
 from finpilot.observability.audit import AuditStore
 from finpilot.responses import prepare_chat_response
 
@@ -103,20 +113,63 @@ class RecordingAuditStore(AuditStore):
 class FakeQueryAgent:
     name = "QueryAgent"
 
-    def handle(self, state: GraphState, tools) -> GraphState:
-        state.final_answer = "finance answer"
-        state.evidence.append(
-            AgentEvidence(
-                tool_name="search_finance_knowledge",
-                source="manual",
-                summary={"document_id": "doc-1"},
-            )
+    def build_context(self, tools) -> SubAgentContext:
+        del tools
+        return SubAgentContext(agent_name=self.name, role="role", goal="goal")
+
+    def execute(self, state: GraphState, tools, *, node_id: str, task: str) -> SubAgentResult:
+        del state, tools
+        return SubAgentResult(
+            node_id=node_id,
+            agent_name=self.name,
+            task=task,
+            status="SUCCEEDED",
+            summary="finance answer",
+            evidence_summary=[
+                AgentEvidence(
+                    tool_name="search_finance_knowledge",
+                    source="manual",
+                    summary={"document_id": "doc-1"},
+                ).model_dump(mode="json")
+            ],
         )
-        return state
+
+
+class FakeTools:
+    def list_allowed(self, tool_names: list[str]):
+        del tool_names
+        return []
+
+    def max_risk_level(self, tool_names: list[str]) -> str:
+        del tool_names
+        return "low"
+
+
+class FixedPlanner:
+    def plan(self, prompt: str, registered_agents: set[str]) -> ExecutionPlan:
+        del prompt
+        assert "QueryAgent" in registered_agents
+        return ExecutionPlan(nodes=[ExecutionPlanNode(node_id="query", agent_name="QueryAgent", task="answer")])
+
+
+class FixedAnsweringService:
+    def answer_with_context(self, prompt_context: dict) -> str:
+        del prompt_context
+        return "finance answer"
+
+    def consume_issues(self):
+        return []
 
 
 def _graph(router: IntentRouter, audit: RecordingAuditStore, memory: FakeMemory) -> FinPilotGraph:
-    graph = FinPilotGraph(router, tools=object(), audit_store=audit, memory_manager=memory)
+    graph = FinPilotGraph(
+        router,
+        tools=FakeTools(),
+        audit_store=audit,
+        memory_manager=memory,
+        planner=FixedPlanner(),
+        answering_service=FixedAnsweringService(),
+    )
     graph.query_agent = FakeQueryAgent()
     return graph
 

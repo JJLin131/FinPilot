@@ -32,3 +32,26 @@ If evidence_sufficient is false, state briefly that the knowledge base does not 
 Context:
 {json.dumps(prompt_context, ensure_ascii=False, indent=2)}
 """
+
+
+def build_execution_plan_prompt(prompt_context: dict[str, Any]) -> str:
+    return f"""
+You are planning a controlled multi-agent execution DAG.
+Choose only agents listed in agents. Return JSON only with this schema:
+{{
+  "nodes": [
+    {{
+      "node_id": "unique short identifier",
+      "agent_name": "registered agent name",
+      "task": "specific assigned task",
+      "depends_on": ["completed node id"]
+    }}
+  ]
+}}
+
+Use dependencies whenever an operation needs data from a prior agent.
+Independent read-only work may be placed in parallel nodes.
+
+Context:
+{json.dumps(prompt_context, ensure_ascii=False, indent=2)}
+"""

@@ -131,7 +131,7 @@ def test_treasury_data_tool_returns_mock_content_without_approval():
     assert invocation.output["content"][0]["metadata"]["accountId"] == "ACC-001"
 
 
-def test_treasury_data_agent_fallback_invokes_balance_query_when_decision_llm_fails():
+def test_treasury_data_agent_fallback_executes_balance_query_without_composing_answer():
     answering = RecordingAnsweringService()
     agent = TreasuryDataAgent(
         runtime=AgentRuntime(decision_service=FailingDecisionService(), answering_service=answering)
@@ -142,7 +142,8 @@ def test_treasury_data_agent_fallback_invokes_balance_query_when_decision_llm_fa
 
     assert state.tool_invocations[0].tool_name == "query_account_balance"
     assert state.evidence[0].tool_name == "query_account_balance"
-    assert answering.evidence
+    assert state.final_answer == ""
+    assert answering.evidence == []
 
 
 def test_high_risk_treasury_operation_requires_approval():

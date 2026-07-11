@@ -127,7 +127,7 @@ def test_runtime_merges_generic_content_into_evidence_and_answer_context():
     assert answering.prompt_context["session"]["recent_messages"] == state.recent_messages
     assert answering.prompt_context["session"]["structured_memory"] == {"city": "南京"}
     assert answering.prompt_context["session"]["semantic_memory"] == state.semantic_memory
-    assert answering.prompt_context["loop"]["working_notes"] == []
+    assert "loop" not in answering.prompt_context
 
 
 def test_context_models_do_not_duplicate_long_term_memory():
@@ -136,7 +136,7 @@ def test_context_models_do_not_duplicate_long_term_memory():
     assert "long_term_memory" not in SessionContext.model_fields
 
 
-def test_final_answer_uses_context_builder_to_compact_oversized_session_history():
+def test_compatibility_answer_helper_uses_unified_answer_policy():
     answering = RecordingAnsweringService()
     runtime = AgentRuntime(answering_service=answering)
     state = _state()
@@ -146,17 +146,15 @@ def test_final_answer_uses_context_builder_to_compact_oversized_session_history(
 
     runtime._compose_final_answer(state, subagent, loop_context)
 
-    compacted = answering.prompt_context["session"]["recent_messages"][0]["content"]
-    assert len(compacted) < 200_000
-    assert state.context_usage["answer"]["compressed"] is True
-    assert any(event["path"].startswith("session") for event in state.context_compactions)
+    assert answering.prompt_context["session"]["recent_messages"][0]["content"] == "x" * 200_000
+    assert state.context_usage["answer"]["effective_policy"] == "answer_default"
 
 
 def test_final_answer_includes_evidence_in_budgeted_bundle_without_raw_bypass():
     answering = RecordingAnsweringService()
     runtime = AgentRuntime(answering_service=answering)
     state = _state()
-    huge_text = "RAG evidence " * 60_000
+    huge_text = "RAG evidence " * 200_000
     state.reranked_docs = [
         RagMatch(
             document_id=f"doc-{index}",
@@ -183,7 +181,6 @@ def test_final_answer_includes_evidence_in_budgeted_bundle_without_raw_bypass():
 def test_subagent_result_is_budgeted_before_writing_global_context():
     runtime = AgentRuntime(answering_service=RecordingAnsweringService())
     state = _state()
-    state.final_answer = "final result " * 50_000
     state.global_context = {"session": build_session_context(state).model_dump(mode="json")}
     raw_rag = "raw rag body " * 20_000
     loop_context = LoopContext(
@@ -208,12 +205,12 @@ def test_subagent_result_is_budgeted_before_writing_global_context():
     )
 
     serialized = str(state.global_context)
-    assert state.final_answer not in serialized
     assert raw_rag not in serialized
+    assert state.subagent_results[0].agent_name == "QueryAgent"
     assert state.context_usage["global"][-1]["within_budget"] is True
 
 
-def test_decision_draft_answer_must_pass_through_answer_bundle():
+def test_runtime_run_does_not_generate_final_answer_inside_subagent():
     answering = RecordingAnsweringService()
     runtime = AgentRuntime(
         decision_service=DraftAnswerDecisionService(),
@@ -224,6 +221,21 @@ def test_decision_draft_answer_must_pass_through_answer_bundle():
 
     runtime.run(state, subagent, tools=object())
 
-    assert state.final_answer == "answer from content"
-    assert answering.prompt_context["loop"]["draft_answer"] == "candidate draft"
-    assert state.context_usage["answer"]["stage"] == "answer"
+    assert state.final_answer == ""
+    assert answering.prompt_context is None
+    assert state.context_usage["decision"][0]["stage"] == "decision"
+
+
+def test_runtime_execute_returns_structured_result_without_generating_final_answer():
+    runtime = AgentRuntime(decision_service=DraftAnswerDecisionService())
+    state = _state()
+    subagent = SubAgentContext(agent_name="QueryAgent", role="role", goal="goal", max_steps=1)
+
+    result = runtime.execute(state, subagent, tools=object(), node_id="knowledge", task="检索适用规则")
+
+    assert result.node_id == "knowledge"
+    assert result.agent_name == "QueryAgent"
+    assert result.status == "SUCCEEDED"
+    assert result.summary == "candidate draft"
+    assert state.final_answer == ""
+    assert "documents" not in result.output

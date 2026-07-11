@@ -33,6 +33,7 @@ class CompressionRule(BaseModel):
             "session.semantic_memory",
             "evidence",
             "subagent_results",
+            "session.subagent_results",
         }
         if self.path not in supported_paths:
             raise ValueError(f"unsupported compression path: {self.path}")
@@ -71,7 +72,7 @@ class ContextPolicy(BaseModel):
 class ContextUsage(BaseModel):
     requested_policy: str
     effective_policy: str
-    stage: Literal["global", "decision", "answer"]
+    stage: Literal["global", "planner", "decision", "answer"]
     token_budget: int
     effective_input_budget: int
     reserved_output_tokens: int
@@ -101,21 +102,21 @@ _AGENT_COMPRESSION_RULES = [
         name="old_step_history",
         path="loop.old_step_history",
         method="deterministic",
-        target_tokens=4_000,
+        target_tokens=16_000,
         priority=10,
     ),
     CompressionRule(
         name="tool_outputs",
         path="loop.tool_outputs",
         method="llm",
-        target_tokens=8_000,
+        target_tokens=32_000,
         priority=20,
     ),
     CompressionRule(
         name="recent_messages",
         path="session.recent_messages",
         method="llm",
-        target_tokens=4_000,
+        target_tokens=16_000,
         priority=30,
         preserve_last=2,
     ),
@@ -123,14 +124,14 @@ _AGENT_COMPRESSION_RULES = [
         name="semantic_memory",
         path="session.semantic_memory",
         method="llm",
-        target_tokens=2_000,
+        target_tokens=8_000,
         priority=40,
     ),
     CompressionRule(
         name="evidence",
         path="evidence",
         method="llm",
-        target_tokens=18_000,
+        target_tokens=80_000,
         priority=50,
     ),
 ]
@@ -149,9 +150,62 @@ _AGENT_PROTECTED_PATHS = [
 
 DEFAULT_CONTEXT_POLICIES: dict[str, ContextPolicy] = {
     "global_default": ContextPolicy(
-        token_budget=64_000,
-        protected_paths=["session.user_message", "route", "subagent_results[*].agent_name"],
-        segment_limits={"session": 32_000, "subagent_results": 24_000},
+        token_budget=384_000,
+        protected_paths=["session.user_message", "route", "session.subagent_results[*].agent_name"],
+        segment_limits={"session": 352_000},
+        compression_rules=[
+            CompressionRule(
+                name="recent_messages",
+                path="session.recent_messages",
+                method="llm",
+                target_tokens=48_000,
+                priority=20,
+                preserve_last=2,
+            ),
+            CompressionRule(
+                name="semantic_memory",
+                path="session.semantic_memory",
+                method="llm",
+                target_tokens=24_000,
+                priority=30,
+            ),
+            CompressionRule(
+                name="completed_subagents",
+                path="session.subagent_results",
+                method="deterministic",
+                target_tokens=160_000,
+                priority=40,
+            ),
+        ],
+    ),
+    "agent_default": ContextPolicy(
+        token_budget=128_000,
+        protected_paths=_AGENT_PROTECTED_PATHS,
+        segment_limits={"session": 48_000, "sub_agent": 8_000, "loop": 64_000, "evidence": 80_000},
+        compression_rules=_AGENT_COMPRESSION_RULES,
+    ),
+    "finance_qa_agent": ContextPolicy(
+        token_budget=128_000,
+        protected_paths=_AGENT_PROTECTED_PATHS,
+        segment_limits={"session": 48_000, "sub_agent": 8_000, "loop": 64_000, "evidence": 80_000},
+        compression_rules=_AGENT_COMPRESSION_RULES,
+    ),
+    "treasury_data_agent": ContextPolicy(
+        token_budget=128_000,
+        protected_paths=_AGENT_PROTECTED_PATHS,
+        segment_limits={"session": 48_000, "sub_agent": 8_000, "loop": 64_000, "evidence": 80_000},
+        compression_rules=_AGENT_COMPRESSION_RULES,
+    ),
+    "treasury_operation_agent": ContextPolicy(
+        token_budget=128_000,
+        protected_paths=_AGENT_PROTECTED_PATHS,
+        segment_limits={"session": 48_000, "sub_agent": 8_000, "loop": 64_000, "evidence": 80_000},
+        compression_rules=_AGENT_COMPRESSION_RULES,
+    ),
+    "planner_default": ContextPolicy(
+        token_budget=48_000,
+        protected_paths=["session.user_message", "agents"],
+        segment_limits={"session": 32_000, "agents": 8_000},
         compression_rules=[
             CompressionRule(
                 name="recent_messages",
@@ -168,38 +222,37 @@ DEFAULT_CONTEXT_POLICIES: dict[str, ContextPolicy] = {
                 target_tokens=8_000,
                 priority=30,
             ),
+        ],
+    ),
+    "answer_default": ContextPolicy(
+        token_budget=512_000,
+        reserved_output_tokens=8_192,
+        protected_paths=["session.user_message", "session.subagent_results[*].agent_name"],
+        segment_limits={"session": 96_000, "evidence": 384_000},
+        compression_rules=[
             CompressionRule(
-                name="completed_subagents",
-                path="subagent_results",
-                method="deterministic",
+                name="recent_messages",
+                path="session.recent_messages",
+                method="llm",
+                target_tokens=48_000,
+                priority=20,
+                preserve_last=2,
+            ),
+            CompressionRule(
+                name="semantic_memory",
+                path="session.semantic_memory",
+                method="llm",
                 target_tokens=24_000,
+                priority=30,
+            ),
+            CompressionRule(
+                name="evidence",
+                path="evidence",
+                method="llm",
+                target_tokens=384_000,
                 priority=40,
             ),
         ],
-    ),
-    "agent_default": ContextPolicy(
-        token_budget=32_000,
-        protected_paths=_AGENT_PROTECTED_PATHS,
-        segment_limits={"session": 8_000, "sub_agent": 4_000, "loop": 16_000, "evidence": 18_000},
-        compression_rules=_AGENT_COMPRESSION_RULES,
-    ),
-    "finance_qa_agent": ContextPolicy(
-        token_budget=32_000,
-        protected_paths=_AGENT_PROTECTED_PATHS,
-        segment_limits={"session": 8_000, "sub_agent": 4_000, "loop": 16_000, "evidence": 18_000},
-        compression_rules=_AGENT_COMPRESSION_RULES,
-    ),
-    "treasury_data_agent": ContextPolicy(
-        token_budget=32_000,
-        protected_paths=_AGENT_PROTECTED_PATHS,
-        segment_limits={"session": 8_000, "sub_agent": 4_000, "loop": 16_000, "evidence": 18_000},
-        compression_rules=_AGENT_COMPRESSION_RULES,
-    ),
-    "treasury_operation_agent": ContextPolicy(
-        token_budget=32_000,
-        protected_paths=_AGENT_PROTECTED_PATHS,
-        segment_limits={"session": 8_000, "sub_agent": 4_000, "loop": 16_000, "evidence": 18_000},
-        compression_rules=_AGENT_COMPRESSION_RULES,
     ),
 }
 
@@ -248,7 +301,7 @@ class ContextBuilder:
         policy_name: str,
         segments: list[ContextSegment],
         *,
-        stage: Literal["global", "decision", "answer"] = "decision",
+        stage: Literal["global", "planner", "decision", "answer"] = "decision",
         query: str = "",
         prompt_renderer: Callable[[dict[str, Any]], str] | None = None,
         summary_cache: dict[str, Any] | None = None,
@@ -357,7 +410,7 @@ class ContextBuilder:
         trigger_tokens: int,
         hard_budget_tokens: int,
         *,
-        stage: Literal["global", "decision", "answer"],
+        stage: Literal["global", "planner", "decision", "answer"],
         query: str,
         summary_cache: dict[str, Any],
     ) -> None:
@@ -385,7 +438,7 @@ class ContextBuilder:
         rule: CompressionRule,
         events: list[dict[str, Any]],
         *,
-        stage: Literal["global", "decision", "answer"],
+        stage: Literal["global", "planner", "decision", "answer"],
         query: str,
         summary_cache: dict[str, Any],
     ) -> bool:
@@ -433,7 +486,7 @@ class ContextBuilder:
         rule: CompressionRule,
         events: list[dict[str, Any]],
         *,
-        stage: Literal["global", "decision", "answer"],
+        stage: Literal["global", "planner", "decision", "answer"],
         query: str,
         summary_cache: dict[str, Any],
     ) -> bool:
@@ -499,7 +552,7 @@ class ContextBuilder:
         rule: CompressionRule,
         events: list[dict[str, Any]],
         *,
-        stage: Literal["global", "decision", "answer"],
+        stage: Literal["global", "planner", "decision", "answer"],
         query: str,
         summary_cache: dict[str, Any],
     ) -> bool:
@@ -569,6 +622,15 @@ class ContextBuilder:
                 payload,
                 ["session", "semantic_memory"],
                 5,
+                max(rule.target_tokens, 1) * 4,
+                rule.name,
+                events,
+            )
+        if rule.path == "session.subagent_results":
+            return _limit_list(
+                payload,
+                ["session", "subagent_results"],
+                3,
                 max(rule.target_tokens, 1) * 4,
                 rule.name,
                 events,

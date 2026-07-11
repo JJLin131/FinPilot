@@ -87,11 +87,17 @@ class RagKnowledgeService:
         )
 
     def search(self, query: str, limit: int = 5) -> list[RagMatch]:
-        self._issues = []
+        matches, issues = self.search_with_issues(query, limit=limit)
+        self._issues = issues
+        return matches
+
+    def search_with_issues(self, query: str, limit: int = 5) -> tuple[list[RagMatch], list[AgentIssue]]:
+        """返回本次检索的诊断信息，避免并发请求竞争实例级 issue 缓存。"""
+        issues: list[AgentIssue] = []
         candidates: dict[str, RagMatch] = {}
         for rewritten in self.query_rewriter.rewrite(query):
             retrieved = self.retriever.retrieve("FINANCE", rewritten, max(limit * 4, 12))
-            self._issues.extend(self._consume_component_issues(self.retriever))
+            issues.extend(self._consume_component_issues(self.retriever))
             for match in retrieved:
                 if not self.registry.is_active(match.document_id, "FINANCE", date.today()):
                     continue
@@ -100,8 +106,8 @@ class RagKnowledgeService:
                 if current is None or match.score > current.score:
                     candidates[key] = match
         reranked = self.reranker.rerank(query, list(candidates.values()), limit)
-        self._issues.extend(self._consume_component_issues(self.reranker))
-        return reranked
+        issues.extend(self._consume_component_issues(self.reranker))
+        return reranked, issues
 
     def consume_issues(self) -> list[AgentIssue]:
         issues = list(self._issues)

@@ -8,14 +8,26 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 
 from finpilot.agent.agents import FinanceQaSubAgent, TreasuryDataAgent, TreasuryOperationAgent
+from finpilot.agent.orchestration import AgentRegistration, ExecutionPlan, ExecutionPlanNode, ExecutionPlanningService, ExecutionScheduler
+from finpilot.agent.prompts import build_execution_plan_prompt
 from finpilot.agent.runtime import CONTEXT_BUDGET_EXCEEDED_ANSWER
 from finpilot.agent.router import IntentRouter
 from finpilot.agent.tools import ToolRegistry
 from finpilot.intents import UNKNOWN_INTENT_ANSWER
-from finpilot.context.builders import build_global_prompt_bundle
+from finpilot.context.builders import build_answer_prompt_bundle, build_global_prompt_bundle, build_plan_prompt_bundle, build_session_context
 from finpilot.issues import dependency_degraded_issue, issue_from_safety_finding, issue_from_tool_failure
+from finpilot.llm import FinanceAnsweringService
 from finpilot.memory.service import MemoryManager
-from finpilot.models import AgentChatResponse, AgentIssue, GraphState, RouteDecision
+from finpilot.models import (
+    AgentChatResponse,
+    AgentEvidence,
+    AgentIssue,
+    GraphState,
+    RouteDecision,
+    SafetyFinding,
+    SubAgentResult,
+    ToolInvocation,
+)
 from finpilot.observability.audit import AuditStore
 from finpilot.observability.tracing import current_trace_id, span
 from finpilot.safety.service import SafetyReviewService
@@ -32,12 +44,16 @@ class FinPilotGraph:
         audit_store: AuditStore,
         memory_manager: MemoryManager,
         safety: SafetyReviewService | None = None,
+        planner: ExecutionPlanningService | None = None,
+        answering_service: FinanceAnsweringService | None = None,
     ):
         self.router = router
         self.tools = tools
         self.audit_store = audit_store
         self.memory_manager = memory_manager
         self.safety = safety or SafetyReviewService()
+        self.planner = planner or ExecutionPlanningService()
+        self.answering_service = answering_service or FinanceAnsweringService()
         self.query_agent = FinanceQaSubAgent()
         self.treasury_data_agent = TreasuryDataAgent()
         self.treasury_operation_agent = TreasuryOperationAgent()
@@ -107,7 +123,8 @@ class FinPilotGraph:
         builder.add_node("intent_classify", self._intent_classify)
         builder.add_node("embedding_score", self._embedding_score)
         builder.add_node("route_decide", self._route_decide)
-        builder.add_node("subagent", self._subagent)
+        builder.add_node("plan_build", self._plan_build)
+        builder.add_node("dag_execute", self._dag_execute)
         builder.add_node("answer_compose", self._answer_compose)
         builder.add_node("response_safety_review", self._response_safety_review)
         builder.add_node("audit_persist", self._audit_persist)
@@ -124,8 +141,9 @@ class FinPilotGraph:
         )
         builder.add_edge("intent_classify", "embedding_score")
         builder.add_edge("embedding_score", "route_decide")
-        builder.add_edge("route_decide", "subagent")
-        builder.add_edge("subagent", "answer_compose")
+        builder.add_edge("route_decide", "plan_build")
+        builder.add_edge("plan_build", "dag_execute")
+        builder.add_edge("dag_execute", "answer_compose")
         builder.add_edge("answer_compose", "response_safety_review")
         builder.add_edge("response_safety_review", "audit_persist")
         builder.add_edge("audit_persist", END)
@@ -243,18 +261,68 @@ class FinPilotGraph:
                 graph_state.issues = [issue.model_copy(update={"severity": "warning"}) for issue in graph_state.issues]
             return graph_state.model_dump()
 
-    def _subagent(self, state: dict[str, Any]) -> dict[str, Any]:
+    def _plan_build(self, state: dict[str, Any]) -> dict[str, Any]:
         graph_state = GraphState.model_validate(state)
-        with self._timed_span(graph_state, "tool.invoke"):
+        with self._timed_span(graph_state, "agent.plan"):
             if graph_state.normalized_intent == "UNKNOWN":
                 graph_state.final_answer = self._issue_answer(graph_state) or UNKNOWN_INTENT_ANSWER
                 return graph_state.model_dump()
-            if graph_state.target_agent == self.treasury_data_agent.name:
-                graph_state = self.treasury_data_agent.handle(graph_state, self.tools)
-            elif graph_state.target_agent == self.treasury_operation_agent.name:
-                graph_state = self.treasury_operation_agent.handle(graph_state, self.tools)
+            agents = self._agent_descriptors()
+            session = build_session_context(graph_state)
+            bundle = build_plan_prompt_bundle(session, agents, summary_cache={})
+            self._record_context_bundle(graph_state, "planner", bundle)
+            if bundle.status == "over_budget":
+                self._record_context_budget_issue(graph_state, bundle)
+                return graph_state.model_dump()
+            try:
+                plan = self.planner.plan(
+                    build_execution_plan_prompt(bundle.payload),
+                    set(self._agent_instances()),
+                )
+            except Exception as exc:
+                graph_state.issues.append(
+                    dependency_degraded_issue(
+                        code="EXECUTION_PLAN_DEGRADED",
+                        component="execution_planner",
+                        message="Execution planner failed; using the routed single-agent fallback.",
+                        exc=exc,
+                    ).model_copy(update={"severity": "warning", "retryable": True})
+                )
+                plan = self._fallback_plan(graph_state)
+            graph_state.execution_plan = plan.model_dump(mode="json")
+            return graph_state.model_dump()
+
+    def _dag_execute(self, state: dict[str, Any]) -> dict[str, Any]:
+        graph_state = GraphState.model_validate(state)
+        with self._timed_span(graph_state, "agent.execute"):
+            if graph_state.final_answer:
+                return graph_state.model_dump()
+            try:
+                plan = ExecutionPlan.model_validate(graph_state.execution_plan)
+                scheduler = ExecutionScheduler(self._agent_registrations(graph_state))
+                session = build_session_context(graph_state)
+                results = scheduler.execute(plan, session)
+            except Exception as exc:
+                graph_state.issues.append(
+                    dependency_degraded_issue(
+                        code="EXECUTION_DAG_FAILED",
+                        component="execution_scheduler",
+                        message="Execution plan could not be completed.",
+                        exc=exc,
+                    )
+                )
+                return graph_state.model_dump()
+
+            graph_state.subagent_results = list(session.subagent_results)
+            for result in results:
+                self._merge_execution_result(graph_state, result)
+
+            global_bundle = build_global_prompt_bundle(graph_state, summary_cache={})
+            self._record_context_bundle(graph_state, "global", global_bundle)
+            if global_bundle.status == "ready":
+                graph_state.global_context = global_bundle.payload
             else:
-                graph_state = self.query_agent.handle(graph_state, self.tools)
+                self._record_context_budget_issue(graph_state, global_bundle)
             graph_state.issues.extend(
                 issue_from_tool_failure(invocation)
                 for invocation in graph_state.tool_invocations
@@ -265,14 +333,164 @@ class FinPilotGraph:
     def _answer_compose(self, state: dict[str, Any]) -> dict[str, Any]:
         graph_state = GraphState.model_validate(state)
         with self._timed_span(graph_state, "answer.compose"):
-            if graph_state.issues and not graph_state.evidence:
+            if graph_state.final_answer:
+                return graph_state.model_dump()
+            if graph_state.issues and not graph_state.evidence and not graph_state.subagent_results:
                 system_answer = self._issue_answer(graph_state)
                 if system_answer:
                     graph_state.final_answer = system_answer
-            if not graph_state.final_answer:
-                graph_state.final_answer = UNKNOWN_INTENT_ANSWER
+                    return graph_state.model_dump()
+            bundle = build_answer_prompt_bundle(
+                build_session_context(graph_state),
+                graph_state.answer_evidence,
+                summary_cache={},
+            )
+            self._record_context_bundle(graph_state, "answer", bundle)
+            if bundle.status == "over_budget":
+                self._record_context_budget_issue(graph_state, bundle)
+                return graph_state.model_dump()
+            graph_state.final_answer = self.answering_service.answer_with_context(bundle.payload)
+            consume = getattr(self.answering_service, "consume_issues", None)
+            if callable(consume):
+                graph_state.issues.extend(consume())
             graph_state.scores["faithfulness"] = 1.0 if graph_state.evidence else 0.4
             return graph_state.model_dump()
+
+    def _agent_instances(self) -> dict[str, Any]:
+        return {
+            self.query_agent.name: self.query_agent,
+            self.treasury_data_agent.name: self.treasury_data_agent,
+            self.treasury_operation_agent.name: self.treasury_operation_agent,
+        }
+
+    def _agent_descriptors(self) -> list[dict[str, Any]]:
+        descriptors: list[dict[str, Any]] = []
+        for agent in self._agent_instances().values():
+            context = agent.build_context(self.tools)
+            tool_names = [tool.name for tool in context.allowed_tools]
+            risk_level = self.tools.max_risk_level(tool_names)
+            descriptors.append(
+                {
+                    "name": agent.name,
+                    "role": context.role,
+                    "goal": context.goal,
+                    "allowed_tools": tool_names,
+                    "execution_mode": "read_only" if risk_level == "low" else "operation",
+                }
+            )
+        return descriptors
+
+    def _agent_registrations(self, parent_state: GraphState) -> dict[str, AgentRegistration]:
+        registrations: dict[str, AgentRegistration] = {}
+        for agent in self._agent_instances().values():
+            context = agent.build_context(self.tools)
+            tool_names = [tool.name for tool in context.allowed_tools]
+            risk_level = self.tools.max_risk_level(tool_names)
+
+            def execute(node: ExecutionPlanNode, session, *, current_agent=agent) -> SubAgentResult:
+                # 子节点在独立状态副本中执行，调度器在每层结束后统一写回主状态。
+                local_state = parent_state.model_copy(deep=True)
+                local_state.global_context = {"session": session.model_dump(mode="json")}
+                local_state.subagent_results = [item.model_copy(deep=True) for item in session.subagent_results]
+                local_state.target_agent = current_agent.name
+                return current_agent.execute(
+                    local_state,
+                    self.tools,
+                    node_id=node.node_id,
+                    task=node.task,
+                )
+
+            registrations[agent.name] = AgentRegistration(
+                name=agent.name,
+                execution_mode="read_only" if risk_level == "low" else "operation",
+                execute=execute,
+            )
+        return registrations
+
+    @staticmethod
+    def _fallback_plan(state: GraphState) -> ExecutionPlan:
+        return ExecutionPlan(
+            nodes=[
+                ExecutionPlanNode(
+                    node_id="routed-agent",
+                    agent_name=state.target_agent,
+                    task=state.user_message,
+                )
+            ]
+        )
+
+    def _merge_execution_result(self, state: GraphState, result: SubAgentResult) -> None:
+        for evidence in result.evidence_summary:
+            try:
+                state.evidence.append(AgentEvidence.model_validate(evidence))
+            except Exception:
+                state.issues.append(
+                    AgentIssue(
+                        code="SUBAGENT_EVIDENCE_INVALID",
+                        component=f"subagent:{result.agent_name}",
+                        message="Sub-agent returned invalid evidence metadata.",
+                        severity="warning",
+                    )
+                )
+        if result.status == "SUCCEEDED":
+            state.answer_evidence.extend(result.raw_evidence)
+
+        runtime_data = result.runtime_data
+        for raw_issue in runtime_data.get("issues", []):
+            try:
+                state.issues.append(AgentIssue.model_validate(raw_issue))
+            except Exception:
+                continue
+        for raw_invocation in runtime_data.get("tool_invocations", []):
+            try:
+                state.tool_invocations.append(ToolInvocation.model_validate(raw_invocation))
+            except Exception:
+                continue
+        for raw_finding in runtime_data.get("safety_findings", []):
+            try:
+                state.safety_findings.append(SafetyFinding.model_validate(raw_finding))
+            except Exception:
+                continue
+
+        if runtime_data.get("context_usage"):
+            execution_usage = state.context_usage.setdefault("execution", {})
+            execution_usage[result.node_id] = runtime_data["context_usage"]
+        state.context_compactions.extend(runtime_data.get("context_compactions", []))
+        state.loop_count += int(runtime_data.get("loop_count", 0))
+
+    @staticmethod
+    def _record_context_bundle(graph_state: GraphState, key: str, bundle, *, append: bool = False) -> None:
+        usage = bundle.usage.model_dump(mode="json")
+        if append:
+            graph_state.context_usage.setdefault(key, []).append(usage)
+        else:
+            graph_state.context_usage[key] = usage
+        for event in bundle.compression_events:
+            enriched = dict(event)
+            enriched.setdefault("stage", bundle.usage.stage)
+            enriched.setdefault("policy", bundle.usage.effective_policy)
+            graph_state.context_compactions.append(enriched)
+
+    @staticmethod
+    def _record_context_budget_issue(graph_state: GraphState, bundle) -> None:
+        graph_state.final_answer = CONTEXT_BUDGET_EXCEEDED_ANSWER
+        graph_state.issues.append(
+            AgentIssue(
+                code="CONTEXT_BUDGET_EXCEEDED",
+                component=f"context:{bundle.usage.stage}",
+                message=CONTEXT_BUDGET_EXCEEDED_ANSWER,
+                severity="error",
+                retryable=True,
+                detail=json.dumps(
+                    {
+                        "budget": bundle.usage.effective_input_budget,
+                        "estimated": bundle.usage.estimated_prompt_tokens,
+                        "paths": bundle.over_budget_paths,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        )
 
     def _response_safety_review(self, state: dict[str, Any]) -> dict[str, Any]:
         graph_state = GraphState.model_validate(state)

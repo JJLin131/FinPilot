@@ -20,6 +20,19 @@ class AgentEvidence(BaseModel):
     summary: dict[str, Any] = Field(default_factory=dict)
 
 
+class SubAgentResult(BaseModel):
+    node_id: str
+    agent_name: str
+    task: str
+    status: Literal["SUCCEEDED", "FAILED", "BLOCKED", "SKIPPED"]
+    summary: str = ""
+    output: dict[str, Any] = Field(default_factory=dict)
+    evidence_summary: list[dict[str, Any]] = Field(default_factory=list)
+    failure_reason: str | None = None
+    raw_evidence: list[dict[str, Any]] = Field(default_factory=list, exclude=True, repr=False)
+    runtime_data: dict[str, Any] = Field(default_factory=dict, exclude=True, repr=False)
+
+
 class AgentIssue(BaseModel):
     code: str
     component: str
@@ -73,6 +86,7 @@ class SessionContext(BaseModel):
     recent_messages: list[dict[str, Any]] = Field(default_factory=list)
     structured_memory: dict[str, Any] = Field(default_factory=dict)
     semantic_memory: list[dict[str, Any]] = Field(default_factory=list)
+    subagent_results: list[SubAgentResult] = Field(default_factory=list)
 
 
 class SubAgentContext(BaseModel):
@@ -84,6 +98,7 @@ class SubAgentContext(BaseModel):
     allowed_tools: list[ToolCard] = Field(default_factory=list)
     max_steps: int = 3
     context_policy: str = "agent_default"
+    assigned_task: str = ""
 
 
 class AgentDecision(BaseModel):
@@ -208,6 +223,9 @@ class GraphState(BaseModel):
     recent_messages: list[dict[str, Any]] = Field(default_factory=list)
     structured_memory: dict[str, Any] = Field(default_factory=dict)
     semantic_memory: list[dict[str, Any]] = Field(default_factory=list)
+    subagent_results: list[SubAgentResult] = Field(default_factory=list)
+    answer_evidence: list[dict[str, Any]] = Field(default_factory=list)
+    execution_plan: dict[str, Any] = Field(default_factory=dict)
     global_context: dict[str, Any] = Field(default_factory=dict)
     loop_count: int = 0
     stop_reason: str | None = None

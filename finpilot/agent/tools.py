@@ -98,6 +98,15 @@ class ToolRegistry:
     def list_tools(self) -> list[ToolCard]:
         return [spec.card() for spec in self._tools.values()]
 
+    def max_risk_level(self, tool_names: list[str]) -> Literal["low", "medium", "high"]:
+        levels = {"low": 0, "medium": 1, "high": 2}
+        highest = "low"
+        for name in tool_names:
+            spec = self._tools.get(name)
+            if spec is not None and levels[spec.risk_level] > levels[highest]:
+                highest = spec.risk_level
+        return highest
+
     def invoke(self, state: GraphState, tool_name: str, **parameters: Any) -> ToolInvocation:
         started = time.perf_counter()
         spec = self._tools.get(tool_name)
@@ -144,8 +153,14 @@ class ToolRegistry:
     def _search_finance_knowledge(self, state: GraphState, parameters: dict[str, Any]) -> dict[str, Any]:
         query = str(parameters.get("query") or state.user_message)
         limit = int(parameters.get("limit") or 3)
-        docs = [match.model_dump() for match in self.rag_service.search(query, limit=limit)]
-        issues = self._consume_rag_issues()
+        search_with_issues = getattr(self.rag_service, "search_with_issues", None)
+        if callable(search_with_issues):
+            matches, issues = search_with_issues(query, limit=limit)
+        else:
+            # 兼容旧检索服务；生产实现使用请求级 issue 返回值以支持并发子 Agent。
+            matches = self.rag_service.search(query, limit=limit)
+            issues = self._consume_rag_issues()
+        docs = [match.model_dump() for match in matches]
         output: dict[str, Any] = {"documents": docs}
         if issues:
             output["issues"] = [issue.model_dump(mode="json") for issue in issues]
