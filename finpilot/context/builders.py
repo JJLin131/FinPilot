@@ -4,7 +4,7 @@ from typing import Any
 
 from finpilot.agent.tools import ToolRegistry
 from finpilot.agent.prompts import build_agent_decision_prompt, build_execution_plan_prompt
-from finpilot.context.compression import ContextBuilder, ContextSegment, PromptContextBundle
+from finpilot.context.compression import ContextBuilder, ContextEventCallback, ContextSegment, PromptContextBundle
 from finpilot.llm import render_finance_answer_prompt
 from finpilot.models import GraphState, LoopContext, SessionContext, SubAgentContext
 
@@ -117,6 +117,7 @@ def build_global_prompt_bundle(
     state: GraphState,
     *,
     summary_cache: dict[str, Any] | None = None,
+    event_callback: ContextEventCallback | None = None,
 ) -> PromptContextBundle:
     session_context = build_session_context(state)
     segments = [ContextSegment(name="session", value=session_context, priority=10)]
@@ -126,6 +127,7 @@ def build_global_prompt_bundle(
         stage="global",
         query=state.user_message,
         summary_cache=summary_cache,
+        event_callback=event_callback,
     )
 
 

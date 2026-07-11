@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import math
 import re
+import time
 from collections.abc import Callable
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
+
+
+logger = logging.getLogger(__name__)
 
 
 class ContextSegment(BaseModel):
@@ -87,6 +92,31 @@ class ContextUsage(BaseModel):
 
     def __getitem__(self, key: str) -> Any:
         return getattr(self, key)
+
+
+ContextEventKind = Literal[
+    "build_started",
+    "compression_started",
+    "compression_finished",
+    "build_finished",
+    "build_failed",
+]
+
+
+class ContextLifecycleEvent(BaseModel):
+    kind: ContextEventKind
+    stage: Literal["global", "planner", "decision", "answer"]
+    policy: str
+    estimated_tokens: int
+    effective_input_budget: int
+    trigger_tokens: int
+    compressed: bool = False
+    within_budget: bool | None = None
+    elapsed_seconds: float = 0.0
+    error: str | None = None
+
+
+ContextEventCallback = Callable[[ContextLifecycleEvent], None]
 
 
 class PromptContextBundle(BaseModel):
@@ -305,79 +335,127 @@ class ContextBuilder:
         query: str = "",
         prompt_renderer: Callable[[dict[str, Any]], str] | None = None,
         summary_cache: dict[str, Any] | None = None,
+        event_callback: ContextEventCallback | None = None,
     ) -> PromptContextBundle:
-        if policy_name not in self.policies:
-            raise ValueError(f"unknown context policy: {policy_name}")
-        policy = self.policies[policy_name]
-        payload = {
-            segment.name: _to_jsonable(segment.value)
-            for segment in sorted(segments, key=lambda item: item.priority)
-        }
-        runtime_policy = policy.model_copy(
-            update={"protected_paths": _resolve_protected_paths(payload, policy.protected_paths)}
-        )
-        render = prompt_renderer or dump_payload
-        payload_tokens_before = estimate_tokens(payload)
-        prompt_tokens_before = estimate_tokens(render(payload))
-        effective_input_budget, model_window_source = self._effective_input_budget(policy)
-        trigger_tokens = int(effective_input_budget * policy.trigger_ratio)
-        prompt_overhead_tokens = estimate_tokens(render({}))
-        payload_trigger_tokens = max(trigger_tokens - prompt_overhead_tokens, 1)
-        payload_hard_budget = max(effective_input_budget - prompt_overhead_tokens, 1)
-        events: list[dict[str, Any]] = []
+        started_at = time.perf_counter()
+        payload: dict[str, Any] = {}
+        payload_tokens_before = 0
+        effective_input_budget = 0
+        trigger_tokens = 0
 
-        if prompt_tokens_before > trigger_tokens:
-            payload = copy.deepcopy(payload)
-            self._compress(
-                payload,
-                runtime_policy,
-                events,
-                payload_trigger_tokens,
-                payload_hard_budget,
+        def emit(kind: ContextEventKind, **updates: Any) -> None:
+            if event_callback is None:
+                return
+            event = ContextLifecycleEvent(
+                kind=kind,
                 stage=stage,
-                query=query,
-                summary_cache=summary_cache if summary_cache is not None else {},
+                policy=policy_name,
+                estimated_tokens=int(updates.pop("estimated_tokens", payload_tokens_before)),
+                effective_input_budget=effective_input_budget,
+                trigger_tokens=trigger_tokens,
+                elapsed_seconds=time.perf_counter() - started_at,
+                **updates,
             )
+            try:
+                event_callback(event)
+            except Exception:
+                logger.debug("Context lifecycle callback failed", exc_info=True)
 
-        for event in events:
-            event.setdefault("stage", stage)
-            event.setdefault("policy", policy_name)
-            event.setdefault(
-                "method",
-                "llm" if event.get("action") in {"llm_summarized", "summarization_failed"} else "deterministic",
+        try:
+            if policy_name not in self.policies:
+                raise ValueError(f"unknown context policy: {policy_name}")
+            policy = self.policies[policy_name]
+            payload = {
+                segment.name: _to_jsonable(segment.value)
+                for segment in sorted(segments, key=lambda item: item.priority)
+            }
+            runtime_policy = policy.model_copy(
+                update={"protected_paths": _resolve_protected_paths(payload, policy.protected_paths)}
             )
-            event.setdefault("step_index", None)
-            event.setdefault("fallback_reason", None)
+            render = prompt_renderer or dump_payload
+            payload_tokens_before = estimate_tokens(payload)
+            prompt_tokens_before = estimate_tokens(render(payload))
+            effective_input_budget, model_window_source = self._effective_input_budget(policy)
+            trigger_tokens = int(effective_input_budget * policy.trigger_ratio)
+            prompt_overhead_tokens = estimate_tokens(render({}))
+            payload_trigger_tokens = max(trigger_tokens - prompt_overhead_tokens, 1)
+            payload_hard_budget = max(effective_input_budget - prompt_overhead_tokens, 1)
+            events: list[dict[str, Any]] = []
+            emit("build_started")
 
-        after_tokens = estimate_tokens(payload)
-        estimated_prompt_tokens = estimate_tokens(render(payload))
-        within_budget = estimated_prompt_tokens <= effective_input_budget
-        usage = ContextUsage(
-            requested_policy=policy_name,
-            effective_policy=policy_name,
-            stage=stage,
-            token_budget=policy.token_budget,
-            effective_input_budget=effective_input_budget,
-            reserved_output_tokens=policy.reserved_output_tokens,
-            trigger_tokens=trigger_tokens,
-            estimated_tokens_before=payload_tokens_before,
-            estimated_tokens_after=after_tokens,
-            estimated_prompt_tokens=estimated_prompt_tokens,
-            compressed=after_tokens < payload_tokens_before,
-            within_budget=within_budget,
-            model_window_source=model_window_source,
-        )
-        return PromptContextBundle(
-            status="ready" if within_budget else "over_budget",
-            payload=payload,
-            usage=usage,
-            compression_events=events,
-            over_budget_paths=_protected_over_budget_paths(
-                payload,
-                runtime_policy.protected_paths,
-                effective_input_budget,
-            ),
-        )
+            if prompt_tokens_before > trigger_tokens:
+                payload = copy.deepcopy(payload)
+                emit("compression_started")
+                self._compress(
+                    payload,
+                    runtime_policy,
+                    events,
+                    payload_trigger_tokens,
+                    payload_hard_budget,
+                    stage=stage,
+                    query=query,
+                    summary_cache=summary_cache if summary_cache is not None else {},
+                )
+                compressed_tokens = estimate_tokens(payload)
+                emit(
+                    "compression_finished",
+                    estimated_tokens=compressed_tokens,
+                    compressed=compressed_tokens < payload_tokens_before,
+                )
+
+            for event in events:
+                event.setdefault("stage", stage)
+                event.setdefault("policy", policy_name)
+                event.setdefault(
+                    "method",
+                    "llm" if event.get("action") in {"llm_summarized", "summarization_failed"} else "deterministic",
+                )
+                event.setdefault("step_index", None)
+                event.setdefault("fallback_reason", None)
+
+            after_tokens = estimate_tokens(payload)
+            estimated_prompt_tokens = estimate_tokens(render(payload))
+            within_budget = estimated_prompt_tokens <= effective_input_budget
+            usage = ContextUsage(
+                requested_policy=policy_name,
+                effective_policy=policy_name,
+                stage=stage,
+                token_budget=policy.token_budget,
+                effective_input_budget=effective_input_budget,
+                reserved_output_tokens=policy.reserved_output_tokens,
+                trigger_tokens=trigger_tokens,
+                estimated_tokens_before=payload_tokens_before,
+                estimated_tokens_after=after_tokens,
+                estimated_prompt_tokens=estimated_prompt_tokens,
+                compressed=after_tokens < payload_tokens_before,
+                within_budget=within_budget,
+                model_window_source=model_window_source,
+            )
+            bundle = PromptContextBundle(
+                status="ready" if within_budget else "over_budget",
+                payload=payload,
+                usage=usage,
+                compression_events=events,
+                over_budget_paths=_protected_over_budget_paths(
+                    payload,
+                    runtime_policy.protected_paths,
+                    effective_input_budget,
+                ),
+            )
+            emit(
+                "build_finished",
+                estimated_tokens=after_tokens,
+                compressed=usage.compressed,
+                within_budget=within_budget,
+            )
+            return bundle
+        except Exception as exc:
+            emit(
+                "build_failed",
+                estimated_tokens=estimate_tokens(payload),
+                error=str(exc),
+            )
+            raise
 
     def _register_policy(self, name: str, override: ContextPolicy | dict[str, Any]) -> None:
         if isinstance(override, ContextPolicy):

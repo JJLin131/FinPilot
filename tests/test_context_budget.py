@@ -6,7 +6,13 @@ import pytest
 
 from finpilot.agent.runtime import AgentRuntime
 from finpilot.context.builders import build_answer_prompt_bundle
-from finpilot.context.compression import CompressionRule, ContextBuilder, ContextPolicy, ContextSegment
+from finpilot.context.compression import (
+    CompressionRule,
+    ContextBuilder,
+    ContextLifecycleEvent,
+    ContextPolicy,
+    ContextSegment,
+)
 from finpilot.models import (
     AgentDecision,
     GraphState,
@@ -17,6 +23,11 @@ from finpilot.models import (
     ToolCard,
     ToolObservation,
 )
+
+
+class FakeSummarizer:
+    def summarize(self, **kwargs):
+        raise AssertionError(f"unexpected summarization call: {kwargs}")
 
 
 def test_context_builder_does_not_compress_under_trigger():
@@ -48,6 +59,75 @@ def test_context_builder_does_not_compress_under_trigger():
     assert bundle.payload["session"]["user_message"] == "hello"
     assert bundle.usage["compressed"] is False
     assert bundle.compression_events == []
+
+
+def test_global_context_builder_emits_build_and_compression_events():
+    events: list[ContextLifecycleEvent] = []
+    builder = ContextBuilder(
+        policies={
+            "global_default": ContextPolicy(
+                token_budget=160,
+                trigger_ratio=0.25,
+                reserved_output_tokens=10,
+                compression_rules=[
+                    CompressionRule(
+                        name="recent_messages",
+                        path="session.recent_messages",
+                        method="deterministic",
+                        target_tokens=40,
+                        priority=10,
+                        preserve_last=1,
+                    )
+                ],
+            )
+        },
+        summarizer=FakeSummarizer(),
+    )
+
+    bundle = builder.build(
+        "global_default",
+        [ContextSegment(name="session", value={"recent_messages": [{"content": "x" * 2000}]})],
+        stage="global",
+        event_callback=events.append,
+    )
+
+    assert [event.kind for event in events] == [
+        "build_started",
+        "compression_started",
+        "compression_finished",
+        "build_finished",
+    ]
+    assert all(event.stage == "global" for event in events)
+    assert all(event.policy == "global_default" for event in events)
+    assert events[-1].estimated_tokens == bundle.usage.estimated_tokens_after
+    assert events[-1].effective_input_budget == bundle.usage.effective_input_budget
+    assert events[-1].within_budget == bundle.usage.within_budget
+
+
+def test_context_builder_does_not_emit_events_without_callback():
+    builder = ContextBuilder(policies={"plain": ContextPolicy(token_budget=1000)}, summarizer=FakeSummarizer())
+    bundle = builder.build(
+        "plain",
+        [ContextSegment(name="session", value={"user_message": "hello"})],
+        stage="global",
+    )
+
+    assert bundle.status == "ready"
+
+
+def test_context_callback_failure_does_not_break_context_build():
+    def broken_callback(event: ContextLifecycleEvent) -> None:
+        raise RuntimeError("ui closed")
+
+    builder = ContextBuilder(policies={"plain": ContextPolicy(token_budget=1000)}, summarizer=FakeSummarizer())
+    bundle = builder.build(
+        "plain",
+        [ContextSegment(name="session", value={"user_message": "hello"})],
+        stage="global",
+        event_callback=broken_callback,
+    )
+
+    assert bundle.status == "ready"
 
 
 def test_finance_policy_compresses_rag_documents_and_preserves_current_message():
