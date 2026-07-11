@@ -13,3 +13,4 @@ docker/.env
 /web/*.tsbuildinfo
 /web/vite-dev*.log
 .worktrees/
+.superpowers/sdd/
