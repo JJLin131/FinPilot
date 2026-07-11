@@ -6,10 +6,12 @@ import re
 
 from finpilot.context.builders import (
     build_answer_prompt_bundle,
+    build_global_prompt_bundle,
     build_loop_prompt_bundle,
     build_session_context,
     init_loop_context,
 )
+from finpilot.context.compression import PromptContextBundle
 from finpilot.agent.decision import AgentDecisionService
 from finpilot.agent.prompts import build_agent_decision_prompt
 from finpilot.agent.tools import ToolRegistry
@@ -23,13 +25,14 @@ from finpilot.models import (
     LoopContext,
     LoopStepRecord,
     RagMatch,
-    SessionContext,
     SubAgentContext,
     ToolObservation,
 )
 from finpilot.safety.models import SafetyFinding
 
 logger = logging.getLogger(__name__)
+
+CONTEXT_BUDGET_EXCEEDED_ANSWER = "上下文超过模型可处理范围，请缩短当前输入或减少附加内容后重试。"
 
 
 class AgentRuntime:
@@ -44,12 +47,19 @@ class AgentRuntime:
     def run(self, state: GraphState, subagent_context: SubAgentContext, tools: ToolRegistry) -> GraphState:
         session_context = build_session_context(state)
         loop_context = init_loop_context(state, subagent_context)
+        summary_cache: dict[str, object] = {}
         state.retrieved_docs = []
         state.reranked_docs = []
 
         while loop_context.step_index < loop_context.max_steps:
             self._debug_contexts(session_context, subagent_context, loop_context)
-            decision = self._decide(session_context, subagent_context, loop_context, state)
+            decision = self._decide(
+                session_context,
+                subagent_context,
+                loop_context,
+                state,
+                summary_cache=summary_cache,
+            )
             self._debug(
                 "agent loop decision",
                 {
@@ -68,15 +78,16 @@ class AgentRuntime:
                 continue
 
             loop_context.stop_reason = decision.decision
-            if decision.draft_answer and not state.final_answer:
-                state.final_answer = decision.draft_answer
+            if decision.draft_answer:
+                loop_context.draft_answer = decision.draft_answer
             break
 
         if loop_context.stop_reason is None:
             loop_context.stop_reason = "max_steps"
 
-        self._compose_final_answer(state, subagent_context, loop_context)
+        self._compose_final_answer(state, subagent_context, loop_context, summary_cache=summary_cache)
         self._sync_loop_state(state, loop_context)
+        self._sync_global_context(state, subagent_context, loop_context, summary_cache=summary_cache)
         return state
 
     def _decide(
@@ -85,13 +96,22 @@ class AgentRuntime:
         subagent_context: SubAgentContext,
         loop_context: LoopContext,
         state: GraphState,
+        *,
+        summary_cache: dict[str, object] | None = None,
     ) -> AgentDecision:
         if state.evidence:
             return AgentDecision(decision="answer", reason="Evidence is available.", enough_information=True)
 
-        prompt_bundle = build_loop_prompt_bundle(session_context, subagent_context, loop_context)
-        state.context_usage["decision"] = prompt_bundle.usage
-        state.context_compactions.extend(prompt_bundle.compression_events)
+        prompt_bundle = build_loop_prompt_bundle(
+            session_context,
+            subagent_context,
+            loop_context,
+            summary_cache=summary_cache,
+        )
+        self._record_context_bundle(state, "decision", prompt_bundle, step_index=loop_context.step_index + 1, append=True)
+        if prompt_bundle.status == "over_budget":
+            self._record_context_budget_issue(state, prompt_bundle)
+            return AgentDecision(decision="stop", reason="Context budget exceeded.", enough_information=False)
         try:
             decision = self.decision_service.decide(build_agent_decision_prompt(prompt_bundle.payload))
         except Exception as exc:
@@ -243,27 +263,36 @@ class AgentRuntime:
                 )
             )
 
-    def _compose_final_answer(self, state: GraphState, subagent_context: SubAgentContext, loop_context: LoopContext) -> None:
+    def _compose_final_answer(
+        self,
+        state: GraphState,
+        subagent_context: SubAgentContext,
+        loop_context: LoopContext,
+        *,
+        summary_cache: dict[str, object] | None = None,
+    ) -> None:
         if state.final_answer:
             return
-        snippets = [match.text for match in state.reranked_docs[:3]]
-        snippets.extend(self._content_snippets(loop_context))
-        answer_bundle = build_answer_prompt_bundle(build_session_context(state), subagent_context, loop_context)
-        state.context_usage["answer"] = answer_bundle.usage
-        state.context_compactions.extend(answer_bundle.compression_events)
-        session_context = SessionContext.model_validate(answer_bundle.payload["session"])
-        answer_loop = answer_bundle.payload["loop"]
-        state.final_answer = self.answering_service.answer_with_context(
-            session_context,
-            snippets,
-            list(answer_loop.get("working_notes") or []),
+        evidence = [match.model_dump(mode="json") for match in state.reranked_docs[:3]]
+        evidence.extend(self._content_evidence(loop_context))
+        answer_bundle = build_answer_prompt_bundle(
+            build_session_context(state),
+            subagent_context,
+            loop_context,
+            evidence,
+            summary_cache=summary_cache,
         )
+        self._record_context_bundle(state, "answer", answer_bundle)
+        if answer_bundle.status == "over_budget":
+            self._record_context_budget_issue(state, answer_bundle)
+            return
+        state.final_answer = self.answering_service.answer_with_context(answer_bundle.payload)
         consume = getattr(self.answering_service, "consume_issues", None)
         if callable(consume):
             state.issues.extend(consume())
 
-    def _content_snippets(self, loop_context: LoopContext) -> list[str]:
-        snippets: list[str] = []
+    def _content_evidence(self, loop_context: LoopContext) -> list[dict]:
+        evidence: list[dict] = []
         for step in loop_context.step_history:
             output = step.observation.output if step.observation is not None else {}
             content = output.get("content", []) if isinstance(output, dict) else []
@@ -272,8 +301,16 @@ class AgentRuntime:
                     continue
                 text = str(item.get("text") or "").strip()
                 if text:
-                    snippets.append(text[:6000])
-        return snippets[:5]
+                    evidence.append(
+                        {
+                            "tool_name": self._content_tool_name(item, output),
+                            "source": item.get("source"),
+                            "title": item.get("title"),
+                            "text": text,
+                            "metadata": item.get("metadata") or {},
+                        }
+                    )
+        return evidence[:5]
 
     def _content_tool_name(self, item: dict, output: dict) -> str:
         if item.get("tool_name"):
@@ -289,6 +326,106 @@ class AgentRuntime:
         if kind == "web_page":
             return "fetch_url"
         return "content"
+
+    def _record_context_bundle(
+        self,
+        state: GraphState,
+        stage: str,
+        bundle: PromptContextBundle,
+        *,
+        step_index: int | None = None,
+        append: bool = False,
+    ) -> None:
+        usage = bundle.usage.model_dump(mode="json")
+        if step_index is not None:
+            usage["step_index"] = step_index
+        if append:
+            existing = state.context_usage.get(stage)
+            values = existing if isinstance(existing, list) else ([existing] if isinstance(existing, dict) else [])
+            values.append(usage)
+            state.context_usage[stage] = values
+        else:
+            state.context_usage[stage] = usage
+
+        for event in bundle.compression_events:
+            enriched = dict(event)
+            enriched.setdefault("stage", stage)
+            enriched.setdefault("policy", bundle.usage.effective_policy)
+            if step_index is not None:
+                enriched.setdefault("step_index", step_index)
+            state.context_compactions.append(enriched)
+
+    def _record_context_budget_issue(self, state: GraphState, bundle: PromptContextBundle) -> None:
+        state.final_answer = CONTEXT_BUDGET_EXCEEDED_ANSWER
+        if any(issue.code == "CONTEXT_BUDGET_EXCEEDED" for issue in state.issues):
+            return
+        state.issues.append(
+            AgentIssue(
+                code="CONTEXT_BUDGET_EXCEEDED",
+                component=f"context:{bundle.usage.stage}",
+                message=CONTEXT_BUDGET_EXCEEDED_ANSWER,
+                severity="error",
+                retryable=True,
+                detail=json.dumps(
+                    {
+                        "budget": bundle.usage.effective_input_budget,
+                        "estimated": bundle.usage.estimated_prompt_tokens,
+                        "paths": bundle.over_budget_paths,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        )
+
+    def _sync_global_context(
+        self,
+        state: GraphState,
+        subagent_context: SubAgentContext,
+        loop_context: LoopContext,
+        *,
+        summary_cache: dict[str, object] | None = None,
+    ) -> None:
+        subagent_results = [
+            {
+                "agent_name": subagent_context.agent_name,
+                "final_result": state.final_answer,
+                "evidence_summary": [item.model_dump(mode="json") for item in state.evidence],
+                "step_summary": [
+                    {
+                        "step_index": step.step_index,
+                        "decision": step.decision.decision,
+                        "tool_name": step.decision.tool_name,
+                        "status": step.observation.status if step.observation else None,
+                        "summary": step.observation.summary if step.observation else None,
+                    }
+                    for step in loop_context.step_history
+                ],
+            }
+        ]
+        bundle = build_global_prompt_bundle(
+            state,
+            subagent_results=subagent_results,
+            summary_cache=summary_cache,
+        )
+        self._record_context_bundle(state, "global", bundle, append=True)
+        if bundle.status == "ready":
+            state.global_context = bundle.payload
+            return
+        state.issues.append(
+            AgentIssue(
+                code="CONTEXT_BUDGET_EXCEEDED",
+                component="context:global_result",
+                message="Sub-agent result exceeded the global context budget and was not written back.",
+                severity="warning",
+                retryable=False,
+                detail=json.dumps(
+                    {
+                        "budget": bundle.usage.effective_input_budget,
+                        "estimated": bundle.usage.estimated_prompt_tokens,
+                    }
+                ),
+            )
+        )
 
     def _sync_loop_state(self, state: GraphState, loop_context: LoopContext) -> None:
         state.loop_count = loop_context.step_index

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from finpilot.agent.runtime import AgentRuntime
-from finpilot.context.compression import ContextBuilder, ContextPolicy, ContextSegment
+from finpilot.context.compression import CompressionRule, ContextBuilder, ContextPolicy, ContextSegment
 from finpilot.models import (
     AgentDecision,
     GraphState,
@@ -22,7 +24,14 @@ def test_context_builder_does_not_compress_under_trigger():
             "test_policy": ContextPolicy(
                 token_budget=10_000,
                 trigger_ratio=0.85,
-                compression_order=["session.recent_messages"],
+                compression_rules=[
+                    CompressionRule(
+                        name="recent_messages",
+                        path="session.recent_messages",
+                        method="llm",
+                        target_tokens=500,
+                    )
+                ],
             )
         }
     )
@@ -76,7 +85,22 @@ def test_finance_policy_compresses_rag_documents_and_preserves_current_message()
             "finance_qa_agent": ContextPolicy(
                 token_budget=900,
                 trigger_ratio=0.85,
-                compression_order=["loop.tool_outputs", "loop.old_step_history"],
+                compression_rules=[
+                    CompressionRule(
+                        name="tool_outputs",
+                        path="loop.tool_outputs",
+                        method="llm",
+                        target_tokens=300,
+                        priority=10,
+                    ),
+                    CompressionRule(
+                        name="old_step_history",
+                        path="loop.old_step_history",
+                        method="deterministic",
+                        target_tokens=200,
+                        priority=20,
+                    ),
+                ],
                 protected_paths=["session.user_message", "loop.step_history[-1]"],
             )
         }
@@ -97,7 +121,14 @@ def test_finance_policy_compresses_rag_documents_and_preserves_current_message()
     assert long_text not in serialized
     assert "documents_summary" in serialized
     assert bundle.usage["compressed"] is True
-    assert any(event["action"] == "summarized_tool_output" for event in bundle.compression_events)
+    assert any(
+        event["action"] in {"llm_summarized", "summarization_failed"}
+        and event["path"].endswith("observation.output.documents")
+        for event in bundle.compression_events
+    )
+    assert all(event["stage"] == "decision" for event in bundle.compression_events)
+    assert all(event["policy"] == "finance_qa_agent" for event in bundle.compression_events)
+    assert all(event["method"] in {"deterministic", "llm"} for event in bundle.compression_events)
     assert bundle.usage["estimated_tokens_after"] <= bundle.usage["token_budget"]
 
 
@@ -109,7 +140,6 @@ def test_context_builder_preserves_negative_index_protected_paths():
                 token_budget=100,
                 trigger_ratio=0.1,
                 protected_paths=["loop.step_history[-1]"],
-                compression_order=[],
             )
         }
     )
@@ -130,6 +160,42 @@ def test_context_builder_preserves_negative_index_protected_paths():
     )
 
     assert bundle.payload["loop"]["step_history"][-1]["note"] == latest_note
+
+
+def test_negative_index_protection_applies_to_latest_step_child_fields():
+    protected_reason = "protected reason " * 100
+    builder = ContextBuilder(
+        policies={
+            "protect_latest_child": ContextPolicy(
+                token_budget=1_000,
+                trigger_ratio=0.1,
+                protected_paths=["loop.step_history[-1].decision.reason"],
+                segment_limits={"loop": 300},
+            )
+        }
+    )
+
+    bundle = builder.build(
+        "protect_latest_child",
+        [
+            ContextSegment(
+                name="loop",
+                value={
+                    "step_history": [
+                        {
+                            "step_index": 1,
+                            "decision": {"decision": "act", "reason": protected_reason},
+                            "observation": {"summary": "x" * 5_000},
+                        }
+                    ]
+                },
+            )
+        ],
+        stage="decision",
+        query="current",
+    )
+
+    assert bundle.payload["loop"]["step_history"][-1]["decision"]["reason"] == protected_reason
 
 
 class RecordingDecisionService:
@@ -211,7 +277,218 @@ def test_runtime_uses_prompt_bundle_and_records_context_debug():
     decision = runtime._decide(session_context, subagent_context, loop_context, state)
 
     assert decision.decision == "answer"
-    assert "decision" in state.context_usage
+    assert isinstance(state.context_usage["decision"], list)
+    assert state.context_usage["decision"][0]["stage"] == "decision"
     assert state.context_compactions
     assert huge_doc not in decision_service.prompt
     assert "documents_summary" in decision_service.prompt
+
+
+def test_policy_override_merges_with_default_rules_and_protection():
+    builder = ContextBuilder(policies={"finance_qa_agent": {"token_budget": 16_000}})
+
+    policy = builder.policies["finance_qa_agent"]
+
+    assert policy.token_budget == 16_000
+    assert "session.user_message" in policy.protected_paths
+    assert policy.compression_rules
+
+
+def test_policy_override_merges_individual_compression_rule_fields():
+    builder = ContextBuilder(
+        policies={
+            "finance_qa_agent": {
+                "compression_rules": [
+                    {"name": "evidence", "target_tokens": 12_000},
+                ]
+            }
+        }
+    )
+
+    rule = next(item for item in builder.policies["finance_qa_agent"].compression_rules if item.name == "evidence")
+
+    assert rule.target_tokens == 12_000
+    assert rule.path == "evidence"
+    assert rule.method == "llm"
+    assert rule.priority == 50
+
+
+def test_unknown_policy_is_rejected_instead_of_silently_falling_back():
+    builder = ContextBuilder()
+
+    with pytest.raises(ValueError, match="unknown context policy"):
+        builder.build(
+            "missing_policy",
+            [ContextSegment(name="session", value={"user_message": "hello"})],
+            stage="decision",
+            query="hello",
+        )
+
+
+def test_uncompressible_payload_returns_over_budget_status():
+    builder = ContextBuilder(
+        policies={
+            "tiny": ContextPolicy(
+                token_budget=100,
+                trigger_ratio=0.5,
+                protected_paths=["session.user_message"],
+            )
+        }
+    )
+
+    bundle = builder.build(
+        "tiny",
+        [
+            ContextSegment(name="session", value={"user_message": "hello"}),
+            ContextSegment(name="memory", value={str(index): "x" * 20 for index in range(500)}),
+        ],
+        stage="decision",
+        query="hello",
+    )
+
+    assert bundle.status == "over_budget"
+    assert bundle.usage.within_budget is False
+    assert bundle.usage.estimated_tokens_after > bundle.usage.effective_input_budget
+
+
+def test_current_user_message_over_budget_is_never_truncated():
+    user_message = "重" * 500
+    builder = ContextBuilder(
+        policies={
+            "tiny": ContextPolicy(
+                token_budget=100,
+                trigger_ratio=0.5,
+                protected_paths=["session.user_message"],
+            )
+        }
+    )
+
+    bundle = builder.build(
+        "tiny",
+        [ContextSegment(name="session", value={"user_message": user_message})],
+        stage="answer",
+        query=user_message,
+    )
+
+    assert bundle.status == "over_budget"
+    assert bundle.payload["session"]["user_message"] == user_message
+    assert "session.user_message" in bundle.over_budget_paths
+
+
+def test_wildcard_protected_path_is_reported_when_it_exceeds_budget():
+    builder = ContextBuilder(
+        policies={
+            "tool_policy": ContextPolicy(
+                token_budget=100,
+                trigger_ratio=0.5,
+                protected_paths=["sub_agent.allowed_tools[*].name"],
+            )
+        }
+    )
+
+    bundle = builder.build(
+        "tool_policy",
+        [
+            ContextSegment(
+                name="sub_agent",
+                value={"allowed_tools": [{"name": "工" * 200, "arguments": {}}]},
+            )
+        ],
+        stage="decision",
+        query="current",
+    )
+
+    assert bundle.status == "over_budget"
+    assert "sub_agent.allowed_tools[*].name" in bundle.over_budget_paths
+
+
+def test_global_context_uses_global_policy_and_keeps_original_state_unchanged():
+    from finpilot.context.builders import build_global_prompt_bundle, build_session_context
+
+    state = GraphState(
+        request_id="req-global",
+        trace_id="trace-global",
+        user_id="user-1",
+        chat_id="chat-1",
+        memory_id="chat:user-1:chat-1",
+        user_message="current question",
+        recent_messages=[{"role": "user", "content": "old" * 80_000}],
+        semantic_memory=[{"memory_key": "preference", "memory_value": "value" * 20_000}],
+    )
+    original_recent_messages = list(state.recent_messages)
+
+    bundle = build_global_prompt_bundle(state, summary_cache={})
+
+    assert bundle.usage.effective_policy == "global_default"
+    assert bundle.usage.stage == "global"
+    assert bundle.payload["session"]["user_message"] == "current question"
+    assert state.recent_messages == original_recent_messages
+    assert "global_context" in GraphState.model_fields
+
+    state.global_context = bundle.payload
+    state.normalized_intent = "FINANCE_KNOWLEDGE_QA"
+    state.target_agent = "QueryAgent"
+    routed_session = build_session_context(state)
+    assert routed_session.normalized_intent == "FINANCE_KNOWLEDGE_QA"
+    assert routed_session.target_agent == "QueryAgent"
+
+
+def test_model_context_window_reserves_output_tokens_from_input_budget():
+    builder = ContextBuilder(
+        policies={
+            "windowed": ContextPolicy(
+                token_budget=10_000,
+                reserved_output_tokens=1_000,
+            )
+        },
+        model_context_windows={"provider:model": 5_000},
+        model_label="provider:model",
+    )
+
+    bundle = builder.build(
+        "windowed",
+        [ContextSegment(name="session", value={"user_message": "hello"})],
+        stage="decision",
+        query="hello",
+    )
+
+    assert bundle.usage.effective_input_budget == 4_000
+    assert bundle.usage.model_window_source == "model_context_windows"
+
+
+def test_effective_model_window_drives_final_deterministic_compaction():
+    builder = ContextBuilder(
+        policies={
+            "windowed": ContextPolicy(
+                token_budget=10_000,
+                reserved_output_tokens=1_000,
+            )
+        },
+        model_context_windows={"provider:model": 1_900},
+        model_label="provider:model",
+    )
+
+    bundle = builder.build(
+        "windowed",
+        [
+            ContextSegment(name="session", value={"user_message": "hello"}),
+            ContextSegment(name="memory", value={"content": "x" * 12_000}),
+        ],
+        stage="decision",
+        query="hello",
+    )
+
+    assert bundle.usage.effective_input_budget == 900
+    assert bundle.status == "ready"
+    assert bundle.usage.compressed is True
+    assert any(event["action"] == "truncated_strings" for event in bundle.compression_events)
+
+
+def test_compression_rule_rejects_unsupported_path():
+    with pytest.raises(ValueError, match="unsupported compression path"):
+        CompressionRule(
+            name="invalid",
+            path="session.unknown_field",
+            method="llm",
+            target_tokens=100,
+        )

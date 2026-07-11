@@ -36,10 +36,10 @@ class FailingDecisionService:
 
 class RecordingAnsweringService:
     def __init__(self):
-        self.snippets: list[str] = []
+        self.evidence: list[dict] = []
 
-    def answer_with_context(self, session_context, snippets: list[str], working_notes: list[str]) -> str:
-        self.snippets = snippets
+    def answer_with_context(self, prompt_context: dict) -> str:
+        self.evidence = prompt_context["evidence"]
         return "answer from treasury mock"
 
 
@@ -142,7 +142,7 @@ def test_treasury_data_agent_fallback_invokes_balance_query_when_decision_llm_fa
 
     assert state.tool_invocations[0].tool_name == "query_account_balance"
     assert state.evidence[0].tool_name == "query_account_balance"
-    assert answering.snippets
+    assert answering.evidence
 
 
 def test_high_risk_treasury_operation_requires_approval():

@@ -120,6 +120,7 @@ class LoopContext(BaseModel):
     working_notes: list[str] = Field(default_factory=list)
     evidence_sufficient: bool = False
     stop_reason: str | None = None
+    draft_answer: str | None = None
 
 
 class AgentChatResponse(BaseModel):
@@ -207,6 +208,7 @@ class GraphState(BaseModel):
     recent_messages: list[dict[str, Any]] = Field(default_factory=list)
     structured_memory: dict[str, Any] = Field(default_factory=dict)
     semantic_memory: list[dict[str, Any]] = Field(default_factory=list)
+    global_context: dict[str, Any] = Field(default_factory=dict)
     loop_count: int = 0
     stop_reason: str | None = None
     evidence_sufficient: bool = False

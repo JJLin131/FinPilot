@@ -31,6 +31,7 @@ def check_runtime_readiness() -> RuntimeReadiness:
         _check_optional_http("embedding", settings.vector_enabled, settings.embedding_base_url, ["/api/tags", "/"]),
         _check_optional_http("reranker", settings.reranker_enabled, settings.reranker_base_url, ["/healthz", "/"]),
         _check_llm_config(),
+        _check_model_context_window(),
         _check_memory_encryption(),
     ]
     return RuntimeReadiness(status=_overall_status(checks), checks=checks)
@@ -71,6 +72,33 @@ def _check_llm_config() -> ReadinessCheck:
         name="llm_config",
         status="failed",
         detail=f"DEEPSEEK_API_KEY is not configured for {','.join(deepseek_features)}",
+    )
+
+
+def _check_model_context_window() -> ReadinessCheck:
+    model_label = f"{settings.ai_provider}:{settings.ai_model_name}"
+    windows = settings.model_context_windows or {}
+    value = windows.get(model_label) or windows.get(settings.ai_model_name)
+    if value is None:
+        return ReadinessCheck(
+            name="model_context_window",
+            status="degraded",
+            detail=f"MODEL_CONTEXT_WINDOWS is not configured for {model_label}; context policy budget will be used.",
+        )
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = 0
+    if parsed <= 0:
+        return ReadinessCheck(
+            name="model_context_window",
+            status="degraded",
+            detail=f"MODEL_CONTEXT_WINDOWS has an invalid value for {model_label}: {value}",
+        )
+    return ReadinessCheck(
+        name="model_context_window",
+        status="ok",
+        detail=f"{model_label} context window is {parsed} tokens",
     )
 
 

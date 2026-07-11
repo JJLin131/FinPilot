@@ -128,19 +128,12 @@ class FailingAnswerClient:
 def test_finance_answering_service_records_fallback_issue():
     service = FinanceAnsweringService(client=FailingAnswerClient())
 
-    from finpilot.models import SessionContext
-
     answer = service.answer_with_context(
-        SessionContext(
-            user_id="user-1",
-            chat_id="chat-1",
-            memory_id="chat:user-1:chat-1",
-            user_message="工资发放审批规则是什么？",
-            normalized_intent="FINANCE_KNOWLEDGE_QA",
-            target_agent="QueryAgent",
-        ),
-        ["工资发放需要审批。"],
-        [],
+        {
+            "session": {"user_message": "工资发放审批规则是什么？"},
+            "evidence": [{"text": "工资发放需要审批。"}],
+            "loop": {"working_notes": []},
+        }
     )
     issues = service.consume_issues()
 

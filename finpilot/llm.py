@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
 import httpx
 
 from finpilot.config import settings
 from finpilot.intents import INTENT_ORDER
 from finpilot.issues import dependency_degraded_issue
-from finpilot.models import AgentIssue, SessionContext
+from finpilot.models import AgentIssue
 
 logger = logging.getLogger(__name__)
 
@@ -212,31 +213,16 @@ Context:
             timeout_seconds=settings.query_rewriter_timeout_seconds,
         )
 
-    def answer_with_context(
-        self,
-        session_context: SessionContext,
-        context_chunks: list[str],
-        working_notes: list[str],
-    ) -> str:
+    def answer_with_context(self, prompt_context: dict) -> str:
         self._issues = []
-        session_payload = {
-            "recent_messages": session_context.recent_messages[-6:],
-            "structured_memory": session_context.structured_memory,
-            "semantic_memory": session_context.semantic_memory[-5:],
-        }
-        supporting_context = {
-            "session": session_payload,
-            "evidence": context_chunks[:5],
-            "working_notes": working_notes[-3:],
-        }
-        if not context_chunks and not any(session_payload.values()) and not working_notes:
+        session_payload = prompt_context.get("session") if isinstance(prompt_context.get("session"), dict) else {}
+        evidence = prompt_context.get("evidence") if isinstance(prompt_context.get("evidence"), list) else []
+        loop = prompt_context.get("loop") if isinstance(prompt_context.get("loop"), dict) else {}
+        if not evidence and not any(session_payload.values()) and not loop.get("working_notes"):
             return "当前知识库没有命中足够相关的规则，请补充更具体的问题。"
         try:
             return self.client.generate(
-                self.PROMPT.format(
-                    query=session_context.user_message,
-                    context=json.dumps(supporting_context, ensure_ascii=False, indent=2),
-                ),
+                render_finance_answer_prompt(prompt_context),
                 model_name=settings.ai_model_name,
             )
         except Exception as exc:
@@ -249,12 +235,21 @@ Context:
                     exc=exc,
                 )
             )
-            if context_chunks:
-                return f"根据当前知识库，优先参考以下内容：{context_chunks[0]}"
+            if evidence:
+                first = evidence[0] if isinstance(evidence[0], str) else json.dumps(evidence[0], ensure_ascii=False)
+                return f"根据当前知识库，优先参考以下内容：{first}"
             return "当前上下文已保留，但回答模型暂时不可用，请稍后重试。"
 
     def consume_issues(self) -> list[AgentIssue]:
         issues = list(self._issues)
         self._issues = []
         return issues
+
+
+def render_finance_answer_prompt(prompt_context: dict[str, Any]) -> str:
+    session = prompt_context.get("session") if isinstance(prompt_context.get("session"), dict) else {}
+    return FinanceAnsweringService.PROMPT.format(
+        query=session.get("user_message", ""),
+        context=json.dumps(prompt_context, ensure_ascii=False, indent=2),
+    )
 

@@ -8,12 +8,14 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 
 from finpilot.agent.agents import FinanceQaSubAgent, TreasuryDataAgent, TreasuryOperationAgent
+from finpilot.agent.runtime import CONTEXT_BUDGET_EXCEEDED_ANSWER
 from finpilot.agent.router import IntentRouter
 from finpilot.agent.tools import ToolRegistry
 from finpilot.intents import UNKNOWN_INTENT_ANSWER
+from finpilot.context.builders import build_global_prompt_bundle
 from finpilot.issues import dependency_degraded_issue, issue_from_safety_finding, issue_from_tool_failure
 from finpilot.memory.service import MemoryManager
-from finpilot.models import AgentChatResponse, GraphState, RouteDecision
+from finpilot.models import AgentChatResponse, AgentIssue, GraphState, RouteDecision
 from finpilot.observability.audit import AuditStore
 from finpilot.observability.tracing import current_trace_id, span
 from finpilot.safety.service import SafetyReviewService
@@ -115,7 +117,11 @@ class FinPilotGraph:
             self._after_input_safety_review,
             {"continue": "context_load", "blocked": "audit_persist"},
         )
-        builder.add_edge("context_load", "intent_classify")
+        builder.add_conditional_edges(
+            "context_load",
+            self._after_context_load,
+            {"continue": "intent_classify", "blocked": "response_safety_review"},
+        )
         builder.add_edge("intent_classify", "embedding_score")
         builder.add_edge("embedding_score", "route_decide")
         builder.add_edge("route_decide", "subagent")
@@ -149,7 +155,38 @@ class FinPilotGraph:
             graph_state.recent_messages = [item.model_dump(mode="json") for item in memory_context.recent_messages]
             graph_state.structured_memory = dict(memory_context.structured_memory)
             graph_state.semantic_memory = [item.model_dump(mode="json") for item in memory_context.semantic_memory]
+            bundle = build_global_prompt_bundle(graph_state, summary_cache={})
+            graph_state.global_context = bundle.payload
+            graph_state.context_usage["global"] = bundle.usage.model_dump(mode="json")
+            for event in bundle.compression_events:
+                enriched = dict(event)
+                enriched.setdefault("stage", "global")
+                enriched.setdefault("policy", bundle.usage.effective_policy)
+                graph_state.context_compactions.append(enriched)
+            if bundle.status == "over_budget":
+                graph_state.final_answer = CONTEXT_BUDGET_EXCEEDED_ANSWER
+                graph_state.issues.append(
+                    AgentIssue(
+                        code="CONTEXT_BUDGET_EXCEEDED",
+                        component="context:global",
+                        message=CONTEXT_BUDGET_EXCEEDED_ANSWER,
+                        severity="error",
+                        retryable=True,
+                        detail=json.dumps(
+                            {
+                                "budget": bundle.usage.effective_input_budget,
+                                "estimated": bundle.usage.estimated_prompt_tokens,
+                                "paths": bundle.over_budget_paths,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
+                )
             return graph_state.model_dump()
+
+    def _after_context_load(self, state: dict[str, Any]) -> str:
+        graph_state = GraphState.model_validate(state)
+        return "blocked" if graph_state.final_answer == CONTEXT_BUDGET_EXCEEDED_ANSWER else "continue"
 
     def _intent_classify(self, state: dict[str, Any]) -> dict[str, Any]:
         graph_state = GraphState.model_validate(state)

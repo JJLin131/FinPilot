@@ -14,6 +14,25 @@ def test_local_settings_allow_development_defaults():
     assert settings.mysql_user == "root"
 
 
+def test_model_context_window_readiness_is_degraded_when_missing_and_ok_when_configured(monkeypatch):
+    import finpilot.readiness as readiness
+
+    monkeypatch.setattr(readiness.settings, "ai_provider", "deepseek")
+    monkeypatch.setattr(readiness.settings, "ai_model_name", "test-model")
+    monkeypatch.setattr(readiness.settings, "model_context_windows", {})
+
+    missing = readiness._check_model_context_window()
+
+    assert missing.status == "degraded"
+    assert "test-model" in missing.detail
+
+    monkeypatch.setattr(readiness.settings, "model_context_windows", {"test-model": 65_536})
+    configured = readiness._check_model_context_window()
+
+    assert configured.status == "ok"
+    assert "65536" in configured.detail
+
+
 def test_non_local_settings_reject_default_mysql_password():
     with pytest.raises(ValidationError, match="MYSQL_PASSWORD"):
         Settings(
@@ -152,6 +171,11 @@ def test_check_runtime_readiness_combines_component_statuses(monkeypatch, tmp_pa
     monkeypatch.setattr(readiness.settings, "deepseek_api_key", "sk-test")
     monkeypatch.setattr(
         readiness.settings,
+        "model_context_windows",
+        {readiness.settings.ai_model_name: 65_536},
+    )
+    monkeypatch.setattr(
+        readiness.settings,
         "memory_encryption_key",
         "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
     )
@@ -166,6 +190,7 @@ def test_check_runtime_readiness_combines_component_statuses(monkeypatch, tmp_pa
         "embedding": "ok",
         "reranker": "ok",
         "llm_config": "ok",
+        "model_context_window": "ok",
         "memory_encryption": "ok",
     }
 
@@ -201,6 +226,11 @@ def test_check_runtime_readiness_marks_disabled_optional_dependencies_ok(monkeyp
     monkeypatch.setattr(readiness, "connect_runtime_mysql", lambda: FakeConnection())
     monkeypatch.setattr(readiness.settings, "bm25_index_path", index_path)
     monkeypatch.setattr(readiness.settings, "deepseek_api_key", "sk-test")
+    monkeypatch.setattr(
+        readiness.settings,
+        "model_context_windows",
+        {readiness.settings.ai_model_name: 65_536},
+    )
     monkeypatch.setattr(
         readiness.settings,
         "memory_encryption_key",

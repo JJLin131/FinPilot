@@ -3,12 +3,14 @@ from __future__ import annotations
 from finpilot.agent.agents.finance_qa_subagent import FinanceQaSubAgent
 from finpilot.agent.runtime import AgentRuntime
 from finpilot.config import settings
+from finpilot.context.builders import build_session_context
 from finpilot.memory.models import MemoryContext
 from finpilot.models import (
     AgentDecision,
     GraphState,
     LoopContext,
     LoopStepRecord,
+    RagMatch,
     SessionContext,
     SubAgentContext,
     ToolCard,
@@ -31,20 +33,21 @@ class FakeTools:
 
 class RecordingAnsweringService:
     def __init__(self):
-        self.snippets = []
-        self.session_context = None
-        self.working_notes = []
+        self.prompt_context = None
 
-    def answer_with_context(
-        self,
-        session_context: SessionContext,
-        snippets: list[str],
-        working_notes: list[str],
-    ) -> str:
-        self.session_context = session_context
-        self.snippets = snippets
-        self.working_notes = working_notes
+    def answer_with_context(self, prompt_context: dict) -> str:
+        self.prompt_context = prompt_context
         return "answer from content"
+
+
+class DraftAnswerDecisionService:
+    def decide(self, prompt: str) -> AgentDecision:
+        del prompt
+        return AgentDecision(
+            decision="answer",
+            enough_information=True,
+            draft_answer="candidate draft",
+        )
 
 
 def _state() -> GraphState:
@@ -119,12 +122,12 @@ def test_runtime_merges_generic_content_into_evidence_and_answer_context():
     assert state.evidence[0].tool_name == "read_file"
     assert state.evidence[0].source == "D:/workspace/note.txt"
     assert state.evidence[0].summary["title"] == "note.txt"
-    assert answering.snippets == ["local file evidence"]
-    assert answering.session_context.user_message == state.user_message
-    assert answering.session_context.recent_messages == state.recent_messages
-    assert answering.session_context.structured_memory == {"city": "南京"}
-    assert answering.session_context.semantic_memory == state.semantic_memory
-    assert answering.working_notes == []
+    assert answering.prompt_context["evidence"][0]["text"] == "local file evidence"
+    assert answering.prompt_context["session"]["user_message"] == state.user_message
+    assert answering.prompt_context["session"]["recent_messages"] == state.recent_messages
+    assert answering.prompt_context["session"]["structured_memory"] == {"city": "南京"}
+    assert answering.prompt_context["session"]["semantic_memory"] == state.semantic_memory
+    assert answering.prompt_context["loop"]["working_notes"] == []
 
 
 def test_context_models_do_not_duplicate_long_term_memory():
@@ -143,7 +146,84 @@ def test_final_answer_uses_context_builder_to_compact_oversized_session_history(
 
     runtime._compose_final_answer(state, subagent, loop_context)
 
-    compacted = answering.session_context.recent_messages[0]["content"]
+    compacted = answering.prompt_context["session"]["recent_messages"][0]["content"]
     assert len(compacted) < 200_000
     assert state.context_usage["answer"]["compressed"] is True
     assert any(event["path"].startswith("session") for event in state.context_compactions)
+
+
+def test_final_answer_includes_evidence_in_budgeted_bundle_without_raw_bypass():
+    answering = RecordingAnsweringService()
+    runtime = AgentRuntime(answering_service=answering)
+    state = _state()
+    huge_text = "RAG evidence " * 60_000
+    state.reranked_docs = [
+        RagMatch(
+            document_id=f"doc-{index}",
+            title=f"Document {index}",
+            source="manual",
+            text=huge_text,
+            score=0.9,
+        )
+        for index in range(3)
+    ]
+
+    runtime._compose_final_answer(
+        state,
+        SubAgentContext(agent_name="QueryAgent", role="role", goal="goal", context_policy="finance_qa_agent"),
+        LoopContext(working_notes=["summary"]),
+    )
+
+    serialized = str(answering.prompt_context)
+    assert huge_text not in serialized
+    assert answering.prompt_context["evidence"]
+    assert state.context_usage["answer"]["within_budget"] is True
+
+
+def test_subagent_result_is_budgeted_before_writing_global_context():
+    runtime = AgentRuntime(answering_service=RecordingAnsweringService())
+    state = _state()
+    state.final_answer = "final result " * 50_000
+    state.global_context = {"session": build_session_context(state).model_dump(mode="json")}
+    raw_rag = "raw rag body " * 20_000
+    loop_context = LoopContext(
+        step_history=[
+            LoopStepRecord(
+                step_index=1,
+                decision=AgentDecision(decision="act", tool_name="search_finance_knowledge"),
+                observation=ToolObservation(
+                    tool_name="search_finance_knowledge",
+                    status="SUCCEEDED",
+                    summary="retrieved",
+                    output={"documents": [{"document_id": "doc-1", "text": raw_rag}]},
+                ),
+            )
+        ]
+    )
+
+    runtime._sync_global_context(
+        state,
+        SubAgentContext(agent_name="QueryAgent", role="role", goal="goal"),
+        loop_context,
+    )
+
+    serialized = str(state.global_context)
+    assert state.final_answer not in serialized
+    assert raw_rag not in serialized
+    assert state.context_usage["global"][-1]["within_budget"] is True
+
+
+def test_decision_draft_answer_must_pass_through_answer_bundle():
+    answering = RecordingAnsweringService()
+    runtime = AgentRuntime(
+        decision_service=DraftAnswerDecisionService(),
+        answering_service=answering,
+    )
+    state = _state()
+    subagent = SubAgentContext(agent_name="QueryAgent", role="role", goal="goal", max_steps=1)
+
+    runtime.run(state, subagent, tools=object())
+
+    assert state.final_answer == "answer from content"
+    assert answering.prompt_context["loop"]["draft_answer"] == "candidate draft"
+    assert state.context_usage["answer"]["stage"] == "answer"

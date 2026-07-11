@@ -142,6 +142,11 @@ class RecordingAuditStore(AuditStore):
         self.approvals.append(decision)
 
 
+class FailIfCalledRouter:
+    def classify_with_issues(self, content: str):
+        raise AssertionError(f"router must not be called for over-budget context: {len(content)}")
+
+
 class BlockingInputSafety(SafetyReviewService):
     def review_input(self, state: GraphState) -> SafetyReviewResult:
         return SafetyReviewResult(
@@ -175,6 +180,22 @@ def test_graph_blocks_input_before_routing_and_records_safety_issue():
     assert response.safety_findings[0].code == "INPUT_PROMPT_INJECTION_BLOCKED"
     assert [issue.code for issue in audit.issues] == ["INPUT_PROMPT_INJECTION_BLOCKED"]
     assert [finding.code for finding in audit.safety_findings] == ["INPUT_PROMPT_INJECTION_BLOCKED"]
+
+
+def test_graph_blocks_over_budget_context_before_router_or_subagent_runs():
+    graph = FinPilotGraph(
+        router=FailIfCalledRouter(),
+        tools=object(),
+        audit_store=RecordingAuditStore(),
+        memory_manager=FakeMemory(),
+    )
+    graph.query_agent = object()
+
+    response = graph.run("user-1", "chat-1", "工" * 100_000)
+
+    assert response.answer == "上下文超过模型可处理范围，请缩短当前输入或减少附加内容后重试。"
+    assert any(issue.code == "CONTEXT_BUDGET_EXCEEDED" for issue in response.issues)
+    assert response.route_debug["context_usage"]["global"]["within_budget"] is False
 
 
 class BlockingResponseSafety(SafetyReviewService):
