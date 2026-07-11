@@ -12,6 +12,7 @@ from typing import Any, Callable, Mapping
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.application import run_in_terminal
+from prompt_toolkit.data_structures import Point
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import ANSI, HTML, StyleAndTextTuples, to_formatted_text
 from prompt_toolkit.history import History, InMemoryHistory
@@ -199,12 +200,15 @@ class FinPilotChatApplication:
         self._active_command = ""
         self._thinking_started_at = 0.0
 
-        self.output_control = FormattedTextControl(self._output_fragments, focusable=False)
+        self.output_control = FormattedTextControl(
+            self._output_fragments,
+            get_cursor_position=self._output_cursor_position,
+            focusable=False,
+        )
         self.output_window = Window(
             self.output_control,
             wrap_lines=True,
             always_hide_cursor=True,
-            get_vertical_scroll=lambda window: self._history_line_count() + (2 if self.busy else 0),
         )
         self.input_area = TextArea(
             multiline=False,
@@ -483,6 +487,10 @@ class FinPilotChatApplication:
             )
         return fragments
 
+    def _output_cursor_position(self) -> Point:
+        fragments = self._output_fragments()
+        return Point(x=0, y=sum(text.count("\n") for _, text in fragments))
+
     def _append_panel(self, title: str, content: str, *, role: str) -> None:
         border_style = f"class:{role}.border"
         text_style = f"class:{role}.text" if role in {"user", "assistant"} else "class:context.value"
@@ -492,9 +500,6 @@ class FinPilotChatApplication:
         fragments.append((border_style, "╰─\n"))
         self._history_fragments.extend(fragments)
         self.output_text += f"\n{title}\n{content}\n"
-
-    def _history_line_count(self) -> int:
-        return sum(text.count("\n") for _, text in self._history_fragments)
 
     def _context_fragments(self) -> StyleAndTextTuples:
         self._drain_events()

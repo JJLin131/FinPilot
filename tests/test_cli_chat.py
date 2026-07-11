@@ -423,3 +423,35 @@ def test_blocking_slash_handler_does_not_block_ui_thread():
     app.wait_for_command(timeout=1)
     assert app.command_busy is False
     assert "status ready" in app.output_text
+
+
+def test_output_cursor_follows_latest_message_after_large_status_table():
+    gate = threading.Event()
+
+    def command_handler(raw, user_id, chat_id, debug, runtime_global):
+        rendered = "\n".join(f"status row {index} " + "x" * 120 for index in range(40))
+        return SimpleNamespace(
+            handled=True,
+            exit_requested=False,
+            chat_id=chat_id,
+            debug=debug,
+        ), rendered
+
+    app = FinPilotChatApplication(
+        user_id="user-1",
+        chat_id="chat-1",
+        debug=False,
+        service_factory=lambda **kwargs: BlockingService(gate, _response_with_context()),
+        command_handler=command_handler,
+        input=DummyInput(),
+        output=DummyOutput(),
+    )
+    app.submit("/status")
+    app.wait_for_command(timeout=1)
+    app.submit("new question")
+
+    content = app.output_control.create_content(width=48, height=12)
+    gate.set()
+    app.wait_for_worker(timeout=1)
+
+    assert content.cursor_position.y == content.line_count - 1
