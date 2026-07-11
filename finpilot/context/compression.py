@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass
 import json
 import logging
 import math
@@ -92,6 +93,24 @@ class ContextUsage(BaseModel):
 
     def __getitem__(self, key: str) -> Any:
         return getattr(self, key)
+
+    def lifecycle_event_fields(self) -> dict[str, Any]:
+        return {
+            "estimated_tokens": self.estimated_tokens_after,
+            "effective_input_budget": self.effective_input_budget,
+            "trigger_tokens": self.trigger_tokens,
+            "compressed": self.compressed,
+            "within_budget": self.within_budget,
+        }
+
+
+@dataclass(frozen=True)
+class _ContextBudget:
+    token_budget: int
+    effective_input_budget: int
+    reserved_output_tokens: int
+    trigger_tokens: int
+    model_window_source: str
 
 
 ContextEventKind = Literal[
@@ -340,21 +359,25 @@ class ContextBuilder:
         started_at = time.perf_counter()
         payload: dict[str, Any] = {}
         payload_tokens_before = 0
-        effective_input_budget = 0
-        trigger_tokens = 0
+        budget: _ContextBudget | None = None
 
-        def emit(kind: ContextEventKind, **updates: Any) -> None:
+        def emit(kind: ContextEventKind, *, usage: ContextUsage | None = None, **updates: Any) -> None:
             if event_callback is None:
                 return
+            event_fields: dict[str, Any] = {
+                "estimated_tokens": payload_tokens_before,
+                "effective_input_budget": budget.effective_input_budget if budget else 0,
+                "trigger_tokens": budget.trigger_tokens if budget else 0,
+            }
+            if usage is not None:
+                event_fields.update(usage.lifecycle_event_fields())
+            event_fields.update(updates)
             event = ContextLifecycleEvent(
                 kind=kind,
                 stage=stage,
                 policy=policy_name,
-                estimated_tokens=int(updates.pop("estimated_tokens", payload_tokens_before)),
-                effective_input_budget=effective_input_budget,
-                trigger_tokens=trigger_tokens,
                 elapsed_seconds=time.perf_counter() - started_at,
-                **updates,
+                **event_fields,
             )
             try:
                 event_callback(event)
@@ -375,15 +398,14 @@ class ContextBuilder:
             render = prompt_renderer or dump_payload
             payload_tokens_before = estimate_tokens(payload)
             prompt_tokens_before = estimate_tokens(render(payload))
-            effective_input_budget, model_window_source = self._effective_input_budget(policy)
-            trigger_tokens = int(effective_input_budget * policy.trigger_ratio)
+            budget = self._resolve_budget(policy)
             prompt_overhead_tokens = estimate_tokens(render({}))
-            payload_trigger_tokens = max(trigger_tokens - prompt_overhead_tokens, 1)
-            payload_hard_budget = max(effective_input_budget - prompt_overhead_tokens, 1)
+            payload_trigger_tokens = max(budget.trigger_tokens - prompt_overhead_tokens, 1)
+            payload_hard_budget = max(budget.effective_input_budget - prompt_overhead_tokens, 1)
             events: list[dict[str, Any]] = []
             emit("build_started")
 
-            if prompt_tokens_before > trigger_tokens:
+            if prompt_tokens_before > budget.trigger_tokens:
                 payload = copy.deepcopy(payload)
                 emit("compression_started")
                 self._compress(
@@ -415,21 +437,21 @@ class ContextBuilder:
 
             after_tokens = estimate_tokens(payload)
             estimated_prompt_tokens = estimate_tokens(render(payload))
-            within_budget = estimated_prompt_tokens <= effective_input_budget
+            within_budget = estimated_prompt_tokens <= budget.effective_input_budget
             usage = ContextUsage(
                 requested_policy=policy_name,
                 effective_policy=policy_name,
                 stage=stage,
-                token_budget=policy.token_budget,
-                effective_input_budget=effective_input_budget,
-                reserved_output_tokens=policy.reserved_output_tokens,
-                trigger_tokens=trigger_tokens,
+                token_budget=budget.token_budget,
+                effective_input_budget=budget.effective_input_budget,
+                reserved_output_tokens=budget.reserved_output_tokens,
+                trigger_tokens=budget.trigger_tokens,
                 estimated_tokens_before=payload_tokens_before,
                 estimated_tokens_after=after_tokens,
                 estimated_prompt_tokens=estimated_prompt_tokens,
                 compressed=after_tokens < payload_tokens_before,
                 within_budget=within_budget,
-                model_window_source=model_window_source,
+                model_window_source=budget.model_window_source,
             )
             bundle = PromptContextBundle(
                 status="ready" if within_budget else "over_budget",
@@ -439,21 +461,16 @@ class ContextBuilder:
                 over_budget_paths=_protected_over_budget_paths(
                     payload,
                     runtime_policy.protected_paths,
-                    effective_input_budget,
+                    budget.effective_input_budget,
                 ),
             )
-            emit(
-                "build_finished",
-                estimated_tokens=after_tokens,
-                compressed=usage.compressed,
-                within_budget=within_budget,
-            )
+            emit("build_finished", usage=usage)
             return bundle
-        except Exception as exc:
+        except Exception:
             emit(
                 "build_failed",
                 estimated_tokens=estimate_tokens(payload),
-                error=str(exc),
+                error="context_build_failed",
             )
             raise
 
@@ -467,18 +484,28 @@ class ContextBuilder:
             return
         self.policies[name] = _merge_policy(base, override)
 
-    def _effective_input_budget(self, policy: ContextPolicy) -> tuple[int, str]:
+    def _resolve_budget(self, policy: ContextPolicy) -> _ContextBudget:
         model_name = self.model_label.split(":", 1)[-1]
         raw_window = self.model_context_windows.get(self.model_label) or self.model_context_windows.get(model_name)
         if raw_window is None:
-            return policy.token_budget, "policy_fallback"
-        window = int(raw_window)
-        available = window - policy.reserved_output_tokens
-        if available <= 0:
-            raise ValueError(
-                f"reserved_output_tokens must be smaller than model context window: {self.model_label}"
-            )
-        return min(policy.token_budget, available), "model_context_windows"
+            effective_input_budget = policy.token_budget
+            model_window_source = "policy_fallback"
+        else:
+            window = int(raw_window)
+            available = window - policy.reserved_output_tokens
+            if available <= 0:
+                raise ValueError(
+                    f"reserved_output_tokens must be smaller than model context window: {self.model_label}"
+                )
+            effective_input_budget = min(policy.token_budget, available)
+            model_window_source = "model_context_windows"
+        return _ContextBudget(
+            token_budget=policy.token_budget,
+            effective_input_budget=effective_input_budget,
+            reserved_output_tokens=policy.reserved_output_tokens,
+            trigger_tokens=int(effective_input_budget * policy.trigger_ratio),
+            model_window_source=model_window_source,
+        )
 
     def _compress(
         self,

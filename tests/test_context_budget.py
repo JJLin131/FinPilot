@@ -5,7 +5,7 @@ import json
 import pytest
 
 from finpilot.agent.runtime import AgentRuntime
-from finpilot.context.builders import build_answer_prompt_bundle
+from finpilot.context.builders import build_answer_prompt_bundle, build_global_prompt_bundle
 from finpilot.context.compression import (
     CompressionRule,
     ContextBuilder,
@@ -128,6 +128,52 @@ def test_context_callback_failure_does_not_break_context_build():
     )
 
     assert bundle.status == "ready"
+
+
+def test_context_builder_emits_redacted_build_failed_event_sequence():
+    events: list[ContextLifecycleEvent] = []
+    render_calls = 0
+
+    def failing_renderer(payload: dict[str, object]) -> str:
+        nonlocal render_calls
+        render_calls += 1
+        if render_calls <= 2:
+            return json.dumps(payload)
+        raise RuntimeError("prompt secret user text")
+
+    builder = ContextBuilder(policies={"plain": ContextPolicy(token_budget=1000)}, summarizer=FakeSummarizer())
+
+    with pytest.raises(RuntimeError, match="prompt secret user text"):
+        builder.build(
+            "plain",
+            [ContextSegment(name="session", value={"user_message": "prompt secret user text"})],
+            stage="global",
+            prompt_renderer=failing_renderer,
+            event_callback=events.append,
+        )
+
+    assert [event.kind for event in events] == ["build_started", "build_failed"]
+    assert events[-1].error == "context_build_failed"
+    assert "prompt secret user text" not in events[-1].model_dump_json()
+
+
+def test_build_global_prompt_bundle_forwards_context_event_callback():
+    events: list[ContextLifecycleEvent] = []
+    state = GraphState(
+        request_id="req-global-events",
+        trace_id="trace-global-events",
+        user_id="user-1",
+        chat_id="chat-1",
+        memory_id="chat:user-1:chat-1",
+        user_message="current question",
+    )
+
+    bundle = build_global_prompt_bundle(state, event_callback=events.append)
+
+    assert bundle.status == "ready"
+    assert [event.kind for event in events] == ["build_started", "build_finished"]
+    assert all(event.stage == "global" for event in events)
+    assert events[-1].estimated_tokens == bundle.usage.estimated_tokens_after
 
 
 def test_finance_policy_compresses_rag_documents_and_preserves_current_message():
