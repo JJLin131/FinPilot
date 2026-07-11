@@ -12,3 +12,4 @@ docker/.env
 /web/dist/
 /web/*.tsbuildinfo
 /web/vite-dev*.log
+.worktrees/
