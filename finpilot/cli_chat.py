@@ -115,6 +115,12 @@ class GlobalContextSnapshotCache:
             self._snapshots.pop((user_id, chat_id), None)
 
 
+@dataclass(frozen=True)
+class _CommandCompleted:
+    result: Any
+    rendered: str
+
+
 def global_context_snapshot(response: AgentChatResponse) -> dict[str, Any] | None:
     debug = response.route_debug or {}
     usage = debug.get("context_usage")
@@ -184,10 +190,13 @@ class FinPilotChatApplication:
         self.snapshot_cache = snapshot_cache or GlobalContextSnapshotCache()
         self.context_state = GlobalContextViewState()
         self.busy = False
+        self.command_busy = False
         self.output_text = ""
         self._history_fragments: StyleAndTextTuples = []
         self._events: Queue[object] = Queue()
         self._worker: threading.Thread | None = None
+        self._command_worker: threading.Thread | None = None
+        self._active_command = ""
         self._thinking_started_at = 0.0
 
         self.output_control = FormattedTextControl(self._output_fragments, focusable=False)
@@ -202,7 +211,7 @@ class FinPilotChatApplication:
             history=history or InMemoryHistory(),
             prompt=HTML("<input.user>You</input.user> <input.symbol>›</input.symbol> "),
             accept_handler=self._accept_input,
-            read_only=Condition(lambda: self.busy),
+            read_only=Condition(lambda: self.busy or self.command_busy),
             height=1,
         )
         self.context_control = FormattedTextControl(self._context_fragments)
@@ -298,8 +307,37 @@ class FinPilotChatApplication:
             self._append_panel("System", "request in progress", role="system")
             self.application.invalidate()
             return
+        if self.command_busy:
+            self._append_panel("System", "command in progress", role="system")
+            self.application.invalidate()
+            return
         runtime_global = self.snapshot_cache.get(self.user_id, self.chat_id)
-        result, rendered = self.command_handler(raw, self.user_id, self.chat_id, self.debug, runtime_global)
+        self.command_busy = True
+        self._active_command = raw.split(maxsplit=1)[0]
+        self._command_worker = threading.Thread(
+            target=self._run_command,
+            args=(raw, runtime_global),
+            daemon=True,
+        )
+        self._command_worker.start()
+        self.application.invalidate()
+
+    def _run_command(self, raw: str, runtime_global: dict[str, object] | None) -> None:
+        try:
+            result, rendered = self.command_handler(
+                raw,
+                self.user_id,
+                self.chat_id,
+                self.debug,
+                runtime_global,
+            )
+            self._post_event(_CommandCompleted(result=result, rendered=rendered))
+        except Exception as exc:
+            self._post_event(("command_error", str(exc)))
+
+    def _apply_command_result(self, completed: _CommandCompleted) -> None:
+        result = completed.result
+        rendered = completed.rendered
         if rendered:
             parsed = list(to_formatted_text(ANSI(rendered.rstrip())))
             self._history_fragments.extend([("", "\n"), *parsed, ("", "\n")])
@@ -307,6 +345,8 @@ class FinPilotChatApplication:
         if getattr(result, "chat_id", self.chat_id) != self.chat_id:
             self.switch_chat(result.chat_id)
         self.debug = bool(getattr(result, "debug", self.debug))
+        self.command_busy = False
+        self._active_command = ""
         if getattr(result, "exit_requested", False):
             self.application.exit()
         else:
@@ -340,6 +380,9 @@ class FinPilotChatApplication:
             if isinstance(event, ContextLifecycleEvent):
                 self.handle_context_event(event)
                 continue
+            if isinstance(event, _CommandCompleted):
+                self._apply_command_result(event)
+                continue
             if not isinstance(event, tuple) or len(event) != 2:
                 continue
             kind, payload = event
@@ -356,12 +399,21 @@ class FinPilotChatApplication:
             elif kind == "error":
                 self.context_state.status = "failed"
                 self._append_panel("FinPilot error", str(payload), role="error")
+            elif kind == "command_error":
+                self.command_busy = False
+                self._active_command = ""
+                self._append_panel("Command error", str(payload), role="error")
             elif kind == "complete":
                 self.busy = False
 
     def wait_for_worker(self, timeout: float | None = None) -> None:
         if self._worker is not None:
             self._worker.join(timeout)
+        self._drain_events()
+
+    def wait_for_command(self, timeout: float | None = None) -> None:
+        if self._command_worker is not None:
+            self._command_worker.join(timeout)
         self._drain_events()
 
     def handle_context_event(self, event: ContextLifecycleEvent) -> None:
@@ -417,6 +469,15 @@ class FinPilotChatApplication:
                     ("class:thinking.spinner", f"{frame} "),
                     ("class:thinking.label", label),
                     ("class:thinking.elapsed", f"  已思考 {elapsed:.1f}s"),
+                    ("", "\n"),
+                ]
+            )
+        if self.command_busy:
+            fragments.extend(
+                [
+                    ("", "\n"),
+                    ("class:thinking.spinner", "⠋ "),
+                    ("class:system.border", f"Running {self._active_command}..."),
                     ("", "\n"),
                 ]
             )

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import pytest
 import threading
+import time
 from types import SimpleNamespace
 from prompt_toolkit.input import DummyInput
+from prompt_toolkit.input.defaults import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
 from finpilot import cli
@@ -246,6 +248,7 @@ def test_slash_command_updates_chat_debug_and_output():
     )
 
     app.submit("/resume chat-2")
+    app.wait_for_command(timeout=1)
 
     assert app.chat_id == "chat-2"
     assert app.debug is True
@@ -348,3 +351,75 @@ def test_slash_command_ansi_is_parsed_instead_of_rendered_as_control_text():
     assert "\x1b" not in rendered
     assert "Status" in rendered
     assert "ansired" in {style for style, _ in fragments}
+
+
+def test_persistent_application_accepts_multiple_commands_and_exits():
+    calls: list[str] = []
+
+    def command_handler(raw, user_id, chat_id, debug, runtime_global):
+        calls.append(raw)
+        return SimpleNamespace(
+            handled=True,
+            exit_requested=raw == "/exit",
+            chat_id=chat_id,
+            debug=debug,
+        ), f"handled {raw}"
+
+    with create_pipe_input() as pipe_input:
+        app = FinPilotChatApplication(
+            user_id="user-1",
+            chat_id="chat-1",
+            debug=False,
+            service_factory=lambda **kwargs: None,
+            command_handler=command_handler,
+            input=pipe_input,
+            output=DummyOutput(),
+        )
+        runner = threading.Thread(target=app.run, daemon=True)
+        runner.start()
+
+        for command in ("/help", "/status"):
+            pipe_input.send_text(f"{command}\n")
+            deadline = time.monotonic() + 1
+            while (not calls or calls[-1] != command or app.command_busy) and time.monotonic() < deadline:
+                time.sleep(0.01)
+
+        pipe_input.send_text("/exit\n")
+        runner.join(timeout=1)
+
+    assert runner.is_alive() is False
+    assert calls == ["/help", "/status", "/exit"]
+
+
+def test_blocking_slash_handler_does_not_block_ui_thread():
+    gate = threading.Event()
+
+    def command_handler(raw, user_id, chat_id, debug, runtime_global):
+        gate.wait(timeout=1)
+        return SimpleNamespace(
+            handled=True,
+            exit_requested=False,
+            chat_id=chat_id,
+            debug=debug,
+        ), "status ready"
+
+    app = FinPilotChatApplication(
+        user_id="user-1",
+        chat_id="chat-1",
+        debug=False,
+        service_factory=lambda **kwargs: None,
+        command_handler=command_handler,
+        input=DummyInput(),
+        output=DummyOutput(),
+    )
+    submit_thread = threading.Thread(target=app.submit, args=("/status",), daemon=True)
+    submit_thread.start()
+    submit_thread.join(timeout=0.1)
+
+    assert submit_thread.is_alive() is False
+    assert app.command_busy is True
+
+    gate.set()
+    app.wait_for_command(timeout=1)
+    assert app.command_busy is False
+    assert "status ready" in app.output_text
