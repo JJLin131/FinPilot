@@ -274,3 +274,77 @@ def test_response_text_preserves_answer_and_debug_details():
 
     assert "上下文分析完成" in text
     assert "loop_count" in text
+
+
+def test_output_fragments_render_user_and_thinking_with_distinct_styles():
+    gate = threading.Event()
+    app = FinPilotChatApplication(
+        user_id="user-1",
+        chat_id="chat-1",
+        debug=False,
+        service_factory=lambda **kwargs: BlockingService(gate, _response_with_context()),
+        input=DummyInput(),
+        output=DummyOutput(),
+    )
+
+    app.submit("hello")
+    fragments = app._output_fragments()
+    rendered = "".join(text for _, text in fragments)
+    styles = {style for style, _ in fragments}
+    gate.set()
+    app.wait_for_worker(timeout=1)
+
+    assert "╭─ You" in rendered
+    assert "FinPilot is thinking" in rendered
+    assert "class:user.border" in styles
+    assert "class:thinking.label" in styles
+    assert "class:thinking.elapsed" in styles
+
+
+def test_response_fragments_restore_finpilot_frame_and_color():
+    gate = threading.Event()
+    gate.set()
+    app = FinPilotChatApplication(
+        user_id="user-1",
+        chat_id="chat-1",
+        debug=False,
+        service_factory=lambda **kwargs: BlockingService(gate, _response_with_context()),
+        input=DummyInput(),
+        output=DummyOutput(),
+    )
+
+    app.submit("hello")
+    app.wait_for_worker(timeout=1)
+    fragments = app._output_fragments()
+    rendered = "".join(text for _, text in fragments)
+
+    assert "╭─ FinPilot" in rendered
+    assert "class:assistant.border" in {style for style, _ in fragments}
+
+
+def test_slash_command_ansi_is_parsed_instead_of_rendered_as_control_text():
+    def command_handler(raw, user_id, chat_id, debug, runtime_global):
+        return SimpleNamespace(
+            handled=True,
+            exit_requested=False,
+            chat_id=chat_id,
+            debug=debug,
+        ), "\x1b[31mStatus\x1b[0m"
+
+    app = FinPilotChatApplication(
+        user_id="user-1",
+        chat_id="chat-1",
+        debug=False,
+        service_factory=lambda **kwargs: None,
+        command_handler=command_handler,
+        input=DummyInput(),
+        output=DummyOutput(),
+    )
+
+    app.submit("/status")
+    fragments = app._output_fragments()
+    rendered = "".join(text for _, text in fragments)
+
+    assert "\x1b" not in rendered
+    assert "Status" in rendered
+    assert "ansired" in {style for style, _ in fragments}

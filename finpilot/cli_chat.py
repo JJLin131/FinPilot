@@ -13,7 +13,7 @@ from typing import Any, Callable, Mapping
 from prompt_toolkit.application import Application
 from prompt_toolkit.application import run_in_terminal
 from prompt_toolkit.filters import Condition
-from prompt_toolkit.formatted_text import HTML, StyleAndTextTuples
+from prompt_toolkit.formatted_text import ANSI, HTML, StyleAndTextTuples, to_formatted_text
 from prompt_toolkit.history import History, InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import HSplit, Layout, Window
@@ -24,6 +24,8 @@ from prompt_toolkit.widgets import Frame, TextArea
 
 from finpilot.context.compression import ContextLifecycleEvent
 from finpilot.models import AgentChatResponse
+
+THINKING_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
 
 def format_tokens(value: int) -> str:
@@ -183,6 +185,7 @@ class FinPilotChatApplication:
         self.context_state = GlobalContextViewState()
         self.busy = False
         self.output_text = ""
+        self._history_fragments: StyleAndTextTuples = []
         self._events: Queue[object] = Queue()
         self._worker: threading.Thread | None = None
         self._thinking_started_at = 0.0
@@ -192,7 +195,7 @@ class FinPilotChatApplication:
             self.output_control,
             wrap_lines=True,
             always_hide_cursor=True,
-            get_vertical_scroll=lambda window: self.output_text.count("\n") + (2 if self.busy else 0),
+            get_vertical_scroll=lambda window: self._history_line_count() + (2 if self.busy else 0),
         )
         self.input_area = TextArea(
             multiline=False,
@@ -218,7 +221,7 @@ class FinPilotChatApplication:
         @bindings.add("c-d")
         def exit_chat(event) -> None:
             if self.busy:
-                self.output_text += "\nrequest in progress\n"
+                self._append_panel("System", "request in progress", role="system")
                 self.application.invalidate()
             else:
                 event.app.exit()
@@ -239,6 +242,15 @@ class FinPilotChatApplication:
                     "context.error": "ansired bold",
                     "session.label": "ansicyan bold",
                     "session.value": "ansiwhite",
+                    "user.border": "ansigreen bold",
+                    "user.text": "ansiwhite",
+                    "assistant.border": "ansicyan bold",
+                    "assistant.text": "ansiwhite",
+                    "system.border": "ansiyellow bold",
+                    "error.border": "ansired bold",
+                    "thinking.spinner": "ansicyan bold",
+                    "thinking.label": "ansicyan bold",
+                    "thinking.elapsed": "ansiyellow bold",
                 }
             ),
             full_screen=False,
@@ -266,7 +278,7 @@ class FinPilotChatApplication:
         if self.busy:
             return
         self.busy = True
-        self.output_text += f"\nYou › {text.strip()}\n"
+        self._append_panel("You", text.strip(), role="user")
         self._thinking_started_at = time.perf_counter()
         self._worker = threading.Thread(target=self._run_request, args=(text.strip(),), daemon=True)
         self._worker.start()
@@ -275,20 +287,23 @@ class FinPilotChatApplication:
     def _handle_command(self, raw: str) -> None:
         if raw.lower() == "/clear":
             self.output_text = ""
+            self._history_fragments.clear()
             self.application.invalidate()
             return
         if raw.lower() in {"/exit", "/quit"} and self.busy:
-            self.output_text += "\nrequest in progress\n"
+            self._append_panel("System", "request in progress", role="system")
             self.application.invalidate()
             return
         if self.busy and raw.split(maxsplit=1)[0].lower() not in {"/status", "/context"}:
-            self.output_text += "\nrequest in progress\n"
+            self._append_panel("System", "request in progress", role="system")
             self.application.invalidate()
             return
         runtime_global = self.snapshot_cache.get(self.user_id, self.chat_id)
         result, rendered = self.command_handler(raw, self.user_id, self.chat_id, self.debug, runtime_global)
         if rendered:
-            self.output_text += f"\n{rendered.rstrip()}\n"
+            parsed = list(to_formatted_text(ANSI(rendered.rstrip())))
+            self._history_fragments.extend([("", "\n"), *parsed, ("", "\n")])
+            self.output_text += "\n" + "".join(text for _, text in parsed) + "\n"
         if getattr(result, "chat_id", self.chat_id) != self.chat_id:
             self.switch_chat(result.chat_id)
         self.debug = bool(getattr(result, "debug", self.debug))
@@ -333,10 +348,14 @@ class FinPilotChatApplication:
                 if snapshot is not None:
                     self.context_state.apply_snapshot(snapshot)
                     self.snapshot_cache.put(self.user_id, self.chat_id, snapshot)
-                self.output_text += f"\n{render_response_text(payload, debug=self.debug)}\n"
+                self._append_panel(
+                    "FinPilot",
+                    render_response_text(payload, debug=self.debug).removeprefix("FinPilot\n"),
+                    role="assistant",
+                )
             elif kind == "error":
                 self.context_state.status = "failed"
-                self.output_text += f"\nFinPilot error: {payload}\n"
+                self._append_panel("FinPilot error", str(payload), role="error")
             elif kind == "complete":
                 self.busy = False
 
@@ -383,10 +402,38 @@ class FinPilotChatApplication:
 
     def _output_fragments(self) -> StyleAndTextTuples:
         self._drain_events()
-        text = self.output_text
+        fragments = list(self._history_fragments)
         if self.busy:
-            text += f"\n{self.thinking_text()}\n"
-        return [("class:context.value", text)]
+            elapsed = max(0.0, time.perf_counter() - self._thinking_started_at)
+            frame = THINKING_FRAMES[int(elapsed * 10) % len(THINKING_FRAMES)]
+            label = (
+                "FinPilot is compressing context"
+                if self.context_state.status == "compressing"
+                else "FinPilot is thinking"
+            )
+            fragments.extend(
+                [
+                    ("", "\n"),
+                    ("class:thinking.spinner", f"{frame} "),
+                    ("class:thinking.label", label),
+                    ("class:thinking.elapsed", f"  已思考 {elapsed:.1f}s"),
+                    ("", "\n"),
+                ]
+            )
+        return fragments
+
+    def _append_panel(self, title: str, content: str, *, role: str) -> None:
+        border_style = f"class:{role}.border"
+        text_style = f"class:{role}.text" if role in {"user", "assistant"} else "class:context.value"
+        fragments: StyleAndTextTuples = [(border_style, f"\n╭─ {title}\n")]
+        for line in (content.splitlines() or [""]):
+            fragments.extend([(border_style, "│ "), (text_style, line), ("", "\n")])
+        fragments.append((border_style, "╰─\n"))
+        self._history_fragments.extend(fragments)
+        self.output_text += f"\n{title}\n{content}\n"
+
+    def _history_line_count(self) -> int:
+        return sum(text.count("\n") for _, text in self._history_fragments)
 
     def _context_fragments(self) -> StyleAndTextTuples:
         self._drain_events()
