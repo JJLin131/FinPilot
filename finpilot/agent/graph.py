@@ -15,6 +15,7 @@ from finpilot.agent.router import IntentRouter
 from finpilot.agent.tools import ToolRegistry
 from finpilot.intents import UNKNOWN_INTENT_ANSWER
 from finpilot.context.builders import build_answer_prompt_bundle, build_global_prompt_bundle, build_plan_prompt_bundle, build_session_context
+from finpilot.context.compression import ContextEventCallback
 from finpilot.issues import dependency_degraded_issue, issue_from_safety_finding, issue_from_tool_failure
 from finpilot.llm import FinanceAnsweringService
 from finpilot.memory.service import MemoryManager
@@ -46,6 +47,7 @@ class FinPilotGraph:
         safety: SafetyReviewService | None = None,
         planner: ExecutionPlanningService | None = None,
         answering_service: FinanceAnsweringService | None = None,
+        context_event_callback: ContextEventCallback | None = None,
     ):
         self.router = router
         self.tools = tools
@@ -54,6 +56,7 @@ class FinPilotGraph:
         self.safety = safety or SafetyReviewService()
         self.planner = planner or ExecutionPlanningService()
         self.answering_service = answering_service or FinanceAnsweringService()
+        self.context_event_callback = context_event_callback
         self.query_agent = FinanceQaSubAgent()
         self.treasury_data_agent = TreasuryDataAgent()
         self.treasury_operation_agent = TreasuryOperationAgent()
@@ -173,7 +176,11 @@ class FinPilotGraph:
             graph_state.recent_messages = [item.model_dump(mode="json") for item in memory_context.recent_messages]
             graph_state.structured_memory = dict(memory_context.structured_memory)
             graph_state.semantic_memory = [item.model_dump(mode="json") for item in memory_context.semantic_memory]
-            bundle = build_global_prompt_bundle(graph_state, summary_cache={})
+            bundle = build_global_prompt_bundle(
+                graph_state,
+                summary_cache={},
+                event_callback=self.context_event_callback,
+            )
             graph_state.global_context = bundle.payload
             graph_state.context_usage["global"] = bundle.usage.model_dump(mode="json")
             for event in bundle.compression_events:
@@ -317,7 +324,11 @@ class FinPilotGraph:
             for result in results:
                 self._merge_execution_result(graph_state, result)
 
-            global_bundle = build_global_prompt_bundle(graph_state, summary_cache={})
+            global_bundle = build_global_prompt_bundle(
+                graph_state,
+                summary_cache={},
+                event_callback=self.context_event_callback,
+            )
             self._record_context_bundle(graph_state, "global", global_bundle)
             if global_bundle.status == "ready":
                 graph_state.global_context = global_bundle.payload

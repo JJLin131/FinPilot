@@ -1,0 +1,276 @@
+from __future__ import annotations
+
+import pytest
+import threading
+from types import SimpleNamespace
+from prompt_toolkit.input import DummyInput
+from prompt_toolkit.output import DummyOutput
+
+from finpilot import cli
+from finpilot.cli_chat import (
+    FinPilotChatApplication,
+    GlobalContextSnapshotCache,
+    GlobalContextViewState,
+    format_global_context_fragments,
+    global_context_snapshot,
+    render_response_text,
+)
+from finpilot.context.compression import ContextLifecycleEvent
+from finpilot.models import AgentChatResponse, RouteDecision
+
+
+def _snapshot(*, used: int = 140_000, budget: int = 380_000, compressed: bool = True):
+    return {
+        "effective_policy": "global_default",
+        "stage": "global",
+        "estimated_tokens_before": 320_000,
+        "estimated_tokens_after": used,
+        "effective_input_budget": budget,
+        "trigger_tokens": 323_000,
+        "compressed": compressed,
+        "within_budget": True,
+        "token_counter": "heuristic",
+    }
+
+
+def test_global_context_state_tracks_compression_and_final_snapshot():
+    state = GlobalContextViewState()
+    state.apply_event(
+        ContextLifecycleEvent(
+            kind="compression_started",
+            stage="global",
+            policy="global_default",
+            estimated_tokens=320_000,
+            effective_input_budget=380_000,
+            trigger_tokens=323_000,
+        )
+    )
+    assert state.status == "compressing"
+    assert state.percent == pytest.approx(320_000 / 380_000)
+
+    state.apply_snapshot(_snapshot())
+
+    assert state.status == "compressed"
+    assert state.used_tokens == 140_000
+    assert state.display_usage == "~140k / 380k"
+
+
+def test_context_cache_isolated_by_user_and_chat():
+    cache = GlobalContextSnapshotCache()
+    cache.put("user-1", "chat-a", {"estimated_tokens_after": 100})
+
+    assert cache.get("user-1", "chat-a") == {"estimated_tokens_after": 100}
+    assert cache.get("user-1", "chat-b") is None
+
+
+def test_global_context_fragments_show_bar_usage_and_state():
+    state = GlobalContextViewState()
+    state.apply_snapshot(_snapshot(compressed=False))
+
+    text = "".join(fragment[1] for fragment in format_global_context_fragments(state, 100))
+
+    assert "global context" in text
+    assert "~140k / 380k" in text
+    assert "37%" in text
+    assert "ready" in text
+
+
+def test_global_context_snapshot_reads_response_runtime_debug():
+    response = AgentChatResponse(
+        request_id="req-1",
+        trace_id="trace-1",
+        domain="FINANCE",
+        status="SUCCEEDED",
+        answer="ok",
+        route=RouteDecision(
+            raw_intent_json="{}",
+            normalized_intent="QUERY",
+            reason="test",
+            confidence=1.0,
+            valid=True,
+            target_agent="QueryAgent",
+            classifier_intent="QUERY",
+        ),
+        route_debug={"context_usage": {"global": _snapshot()}},
+    )
+
+    assert global_context_snapshot(response) == _snapshot()
+
+
+def test_status_prefers_runtime_global_snapshot(monkeypatch):
+    monkeypatch.setattr(cli, "_load_chat_messages", lambda user_id, chat_id: [])
+
+    status = cli._build_status_snapshot("user-1", "chat-1", False, runtime_global=_snapshot())
+
+    assert status["context_source"] == "runtime global_default"
+    assert status["estimated_tokens"] == 140_000
+    assert status["effective_input_budget"] == 380_000
+
+
+class BlockingService:
+    def __init__(self, gate: threading.Event, response: AgentChatResponse) -> None:
+        self.gate = gate
+        self.response = response
+
+    def chat(self, user_id: str, chat_id: str, content: str) -> AgentChatResponse:
+        self.gate.wait(timeout=1)
+        return self.response
+
+    def shutdown(self) -> None:
+        return None
+
+
+def _response_with_context() -> AgentChatResponse:
+    return AgentChatResponse(
+        request_id="req-1",
+        trace_id="trace-1",
+        domain="FINANCE",
+        status="SUCCEEDED",
+        answer="上下文分析完成。",
+        route=RouteDecision(
+            raw_intent_json="{}",
+            normalized_intent="QUERY",
+            reason="test",
+            confidence=1.0,
+            valid=True,
+            target_agent="QueryAgent",
+            classifier_intent="QUERY",
+        ),
+        route_debug={"context_usage": {"global": _snapshot(compressed=False)}},
+    )
+
+
+def test_submit_keeps_input_and_status_present_while_worker_runs():
+    gate = threading.Event()
+    service = BlockingService(gate, _response_with_context())
+    app = FinPilotChatApplication(
+        user_id="user-1",
+        chat_id="chat-1",
+        debug=False,
+        service_factory=lambda **kwargs: service,
+        input=DummyInput(),
+        output=DummyOutput(),
+    )
+
+    app.submit("hello")
+
+    assert app.busy is True
+    assert app.input_area is not None
+    assert app.context_control is not None
+
+    gate.set()
+    app.wait_for_worker(timeout=1)
+    assert app.busy is False
+    assert app.context_state.status == "ready"
+    assert "上下文分析完成" in app.output_text
+
+
+def test_compression_event_updates_thinking_copy():
+    app = FinPilotChatApplication(
+        user_id="user-1",
+        chat_id="chat-1",
+        debug=False,
+        service_factory=lambda **kwargs: None,
+        input=DummyInput(),
+        output=DummyOutput(),
+    )
+    app.handle_context_event(
+        ContextLifecycleEvent(
+            kind="compression_started",
+            stage="global",
+            policy="global_default",
+            estimated_tokens=320_000,
+            effective_input_budget=380_000,
+            trigger_tokens=323_000,
+        )
+    )
+
+    assert "FinPilot is compressing context" in app.thinking_text()
+
+
+def test_switch_chat_restores_snapshot_from_current_process_cache():
+    cache = GlobalContextSnapshotCache()
+    cache.put("user-1", "chat-a", _snapshot(used=100, budget=1000, compressed=False))
+    app = FinPilotChatApplication(
+        user_id="user-1",
+        chat_id="chat-b",
+        debug=False,
+        service_factory=lambda **kwargs: None,
+        snapshot_cache=cache,
+        input=DummyInput(),
+        output=DummyOutput(),
+    )
+
+    app.switch_chat("chat-a")
+    assert app.context_state.used_tokens == 100
+
+    app.switch_chat("chat-c")
+    assert app.context_state.status == "waiting"
+
+
+def test_status_fragments_keep_session_fields_at_narrow_width():
+    app = FinPilotChatApplication(
+        user_id="user-1",
+        chat_id="chat-1",
+        debug=False,
+        service_factory=lambda **kwargs: None,
+        input=DummyInput(),
+        output=DummyOutput(),
+    )
+
+    text = "".join(fragment[1] for fragment in app.status_fragments(width=52))
+
+    assert "global context" in text
+    assert "user=user-1" in text
+    assert "chat=chat-1" in text
+    assert "debug=off" in text
+
+
+def test_slash_command_updates_chat_debug_and_output():
+    def command_handler(raw: str, user_id: str, chat_id: str, debug: bool, runtime_global):
+        return SimpleNamespace(
+            handled=True,
+            exit_requested=False,
+            chat_id="chat-2",
+            debug=True,
+        ), "switched"
+
+    app = FinPilotChatApplication(
+        user_id="user-1",
+        chat_id="chat-1",
+        debug=False,
+        service_factory=lambda **kwargs: None,
+        command_handler=command_handler,
+        input=DummyInput(),
+        output=DummyOutput(),
+    )
+
+    app.submit("/resume chat-2")
+
+    assert app.chat_id == "chat-2"
+    assert app.debug is True
+    assert "switched" in app.output_text
+
+
+def test_approval_proxy_uses_callback_before_application_loop_starts():
+    app = FinPilotChatApplication(
+        user_id="user-1",
+        chat_id="chat-1",
+        debug=False,
+        service_factory=lambda **kwargs: None,
+        input=DummyInput(),
+        output=DummyOutput(),
+    )
+    callback = app.approval_proxy(lambda request: f"approved:{request}")
+
+    assert callback("request") == "approved:request"
+
+
+def test_response_text_preserves_answer_and_debug_details():
+    response = _response_with_context()
+    response.route_debug["loop_count"] = 2
+
+    text = render_response_text(response, debug=True)
+
+    assert "上下文分析完成" in text
+    assert "loop_count" in text

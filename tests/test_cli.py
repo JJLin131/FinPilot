@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typer.testing import CliRunner
 
 from finpilot import cli
+from finpilot.context.compression import ContextLifecycleEvent
 from finpilot.memory.models import ChatSessionSummary, ChatTurn
 from finpilot.models import AgentChatResponse, AgentEvidence, RouteDecision, ToolInvocation
 from finpilot.safety.approval import ApprovalDecision
@@ -13,6 +14,22 @@ from finpilot.safety.models import SafetyFinding
 
 
 runner = CliRunner()
+
+
+def test_default_service_factory_accepts_context_event_callback(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class RecordingService:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("finpilot.agent.service.FinPilotService", RecordingService)
+    def callback(event: ContextLifecycleEvent) -> None:
+        return None
+
+    cli._default_service_factory(context_event_callback=callback)
+
+    assert captured["context_event_callback"] is callback
 
 
 class FakeService:
@@ -165,6 +182,31 @@ def test_chat_handles_slash_commands_and_message(monkeypatch, tmp_path):
     assert "Slash commands" in result.output
     assert "Debug" in result.output
     assert "New chat" in result.output
+
+
+def test_chat_uses_persistent_application_in_tty(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+
+    class FakeChatApplication:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def run(self) -> None:
+            captured["ran"] = True
+
+        def approval_proxy(self, callback):
+            return callback
+
+    monkeypatch.setattr(cli, "_should_use_persistent_chat", lambda: True)
+    monkeypatch.setattr(cli, "FinPilotChatApplication", FakeChatApplication)
+    monkeypatch.setattr(cli, "_history_path", lambda: tmp_path / "history")
+
+    result = runner.invoke(cli.app, ["chat", "--user-id", "user-1", "--chat-id", "chat-1"])
+
+    assert result.exit_code == 0
+    assert captured["user_id"] == "user-1"
+    assert captured["chat_id"] == "chat-1"
+    assert captured["ran"] is True
 
 
 def test_cli_approval_decision_parses_once_session_and_deny():

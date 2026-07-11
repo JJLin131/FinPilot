@@ -8,6 +8,7 @@ from finpilot.agent.agents.finance_qa_subagent import FinanceQaSubAgent
 from finpilot.agent.router import IntentRouter
 from finpilot.agent.tools import ToolRegistry
 from finpilot.config import settings
+from finpilot.context.compression import ContextLifecycleEvent
 from finpilot.memory.models import MemoryContext
 from finpilot.models import AgentIssue, EvalSuiteResult, GraphState, RouteDecision, SubAgentContext, SubAgentResult, ToolInvocation
 from finpilot.observability.audit import AuditStore
@@ -224,6 +225,26 @@ def test_graph_blocks_over_budget_context_before_router_or_subagent_runs():
     assert response.answer == "上下文超过模型可处理范围，请缩短当前输入或减少附加内容后重试。"
     assert any(issue.code == "CONTEXT_BUDGET_EXCEEDED" for issue in response.issues)
     assert response.route_debug["context_usage"]["global"]["within_budget"] is False
+
+
+def test_graph_forwards_only_global_context_lifecycle_events():
+    events: list[ContextLifecycleEvent] = []
+    graph = FinPilotGraph(
+        router=FailIfCalledRouter(),
+        tools=object(),
+        audit_store=RecordingAuditStore(),
+        memory_manager=FakeMemory(),
+        context_event_callback=events.append,
+    )
+    graph.query_agent = object()
+
+    response = graph.run("user-1", "chat-1", "工" * 500_000)
+
+    assert response.route_debug["context_usage"]["global"]["within_budget"] is False
+    assert events
+    assert {event.stage for event in events} == {"global"}
+    final_global = response.route_debug["context_usage"]["global"]
+    assert events[-1].estimated_tokens == final_global["estimated_tokens_after"]
 
 
 class BlockingResponseSafety(SafetyReviewService):

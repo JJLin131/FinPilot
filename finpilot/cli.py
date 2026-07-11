@@ -4,6 +4,7 @@ import json
 import logging
 import contextlib
 import io
+import sys
 import threading
 import time
 import uuid
@@ -33,7 +34,8 @@ from rich.text import Text
 
 from finpilot.config import settings
 from finpilot.agent.tooling.file_access import FileAccessStore
-from finpilot.context.compression import DEFAULT_CONTEXT_POLICIES, estimate_tokens
+from finpilot.context.compression import ContextEventCallback, DEFAULT_CONTEXT_POLICIES, estimate_tokens
+from finpilot.cli_chat import FinPilotChatApplication
 from finpilot.memory.models import ChatSessionSummary, ChatTurn
 from finpilot.memory.service import RECENT_MESSAGE_LIMIT
 from finpilot.memory.stores import AgentChatMemoryStore
@@ -87,7 +89,10 @@ app.add_typer(chroma_app, name="chroma")
 
 
 def _default_service_factory(
-    *, interactive_approval: bool = False, approval_service: ApprovalService | None = None
+    *,
+    interactive_approval: bool = False,
+    approval_service: ApprovalService | None = None,
+    context_event_callback: ContextEventCallback | None = None,
 ) -> "FinPilotService":
     _configure_cli_runtime()
     stderr = io.StringIO()
@@ -99,7 +104,8 @@ def _default_service_factory(
             safety=_build_safety_review_service(
                 interactive_approval=interactive_approval,
                 approval_service=approval_service,
-            )
+            ),
+            context_event_callback=context_event_callback,
         )
 
 
@@ -166,6 +172,22 @@ def chat_command(
     if resume:
         _render_resume_notice(resolved_user_id, current_chat_id)
     _render_help()
+    if _should_use_persistent_chat():
+        chat_app = FinPilotChatApplication(
+            user_id=resolved_user_id,
+            chat_id=current_chat_id,
+            debug=debug_enabled,
+            history=history,
+            service_factory=lambda **kwargs: _create_service(
+                interactive_approval=True,
+                approval_service=approval_service,
+                context_event_callback=kwargs.get("context_event_callback"),
+            ),
+            command_handler=_capture_slash_command,
+        )
+        approval_service.callback = chat_app.approval_proxy(_prompt_cli_approval)
+        chat_app.run()
+        return
     while True:
         try:
             raw = _prompt_user_input(history, resolved_user_id, current_chat_id, debug_enabled).strip()
@@ -194,6 +216,28 @@ def chat_command(
             approval_service=approval_service,
         )
         _render_response(response, debug=debug_enabled)
+
+
+def _should_use_persistent_chat() -> bool:
+    return bool(sys.stdin.isatty() and sys.stdout.isatty())
+
+
+def _capture_slash_command(
+    raw: str,
+    user_id: str,
+    chat_id: str,
+    debug: bool,
+    runtime_global: dict[str, object] | None = None,
+) -> tuple[SlashCommandResult, str]:
+    with console.capture() as capture:
+        result = _handle_slash_command(
+            raw,
+            user_id,
+            chat_id,
+            debug,
+            runtime_global=runtime_global,
+        )
+    return result, capture.get()
 
 
 @app.command()
@@ -362,7 +406,14 @@ class SlashCommandResult:
         self.debug = debug
 
 
-def _handle_slash_command(raw: str, user_id: str, chat_id: str, debug: bool) -> SlashCommandResult:
+def _handle_slash_command(
+    raw: str,
+    user_id: str,
+    chat_id: str,
+    debug: bool,
+    *,
+    runtime_global: dict[str, object] | None = None,
+) -> SlashCommandResult:
     if not raw.startswith("/"):
         return SlashCommandResult(handled=False, exit_requested=False, chat_id=chat_id, debug=debug)
 
@@ -396,7 +447,7 @@ def _handle_slash_command(raw: str, user_id: str, chat_id: str, debug: bool) -> 
             debug = not debug
         _render_system_notice("Debug", "on" if debug else "off")
     elif command in {"/status", "/context"}:
-        _render_status(user_id, chat_id, debug)
+        _render_status(user_id, chat_id, debug, runtime_global=runtime_global)
     elif command == "/clear":
         clear_terminal()
     else:
@@ -433,10 +484,17 @@ def _run_chat(
 
 
 def _create_service(
-    *, interactive_approval: bool = False, approval_service: ApprovalService | None = None
+    *,
+    interactive_approval: bool = False,
+    approval_service: ApprovalService | None = None,
+    context_event_callback: ContextEventCallback | None = None,
 ) -> FinPilotService:
     if service_factory is _default_service_factory:
-        return service_factory(interactive_approval=interactive_approval, approval_service=approval_service)
+        return service_factory(
+            interactive_approval=interactive_approval,
+            approval_service=approval_service,
+            context_event_callback=context_event_callback,
+        )
     return service_factory()
 
 
@@ -599,8 +657,14 @@ def _render_splash(user_id: str, chat_id: str, debug: bool) -> None:
     )
 
 
-def _render_status(user_id: str, chat_id: str, debug: bool) -> None:
-    snapshot = _build_status_snapshot(user_id, chat_id, debug)
+def _render_status(
+    user_id: str,
+    chat_id: str,
+    debug: bool,
+    *,
+    runtime_global: dict[str, object] | None = None,
+) -> None:
+    snapshot = _build_status_snapshot(user_id, chat_id, debug, runtime_global=runtime_global)
     body = Group(
         _status_session_table(snapshot),
         _status_context_table(snapshot),
@@ -619,12 +683,23 @@ def _render_status(user_id: str, chat_id: str, debug: bool) -> None:
     )
 
 
-def _build_status_snapshot(user_id: str, chat_id: str, debug: bool) -> dict[str, object]:
+def _build_status_snapshot(
+    user_id: str,
+    chat_id: str,
+    debug: bool,
+    *,
+    runtime_global: dict[str, object] | None = None,
+) -> dict[str, object]:
     messages, load_error = _load_messages_for_status(user_id, chat_id)
-    estimated_tokens = estimate_tokens([message.model_dump(mode="json") for message in messages]) if messages else 0
+    history_estimate = estimate_tokens([message.model_dump(mode="json") for message in messages]) if messages else 0
     policy = DEFAULT_CONTEXT_POLICIES["agent_default"]
     model_label = _model_label()
     model_window = _model_context_window_tokens(model_label)
+    estimated_tokens = (
+        int(runtime_global["estimated_tokens_after"])
+        if runtime_global is not None
+        else history_estimate
+    )
     return {
         "user_id": user_id,
         "chat_id": chat_id,
@@ -636,6 +711,13 @@ def _build_status_snapshot(user_id: str, chat_id: str, debug: bool) -> dict[str,
         "max_stored_messages": "append-only",
         "load_error": load_error,
         "estimated_tokens": estimated_tokens,
+        "context_source": "runtime global_default" if runtime_global is not None else "history estimate",
+        "runtime_global": runtime_global,
+        "effective_input_budget": (
+            int(runtime_global["effective_input_budget"])
+            if runtime_global is not None
+            else None
+        ),
         "model_context_window": model_window,
         "model_context_window_setting": _model_context_window_setting_hint(model_label),
         "model_context_percent": (estimated_tokens / model_window) if model_window else None,
@@ -666,7 +748,18 @@ def _status_context_table(snapshot: dict[str, object]) -> Table:
     table = Table(title="Context", box=box.SIMPLE_HEAVY, border_style=BRAND_BORDER, width=_panel_width(92))
     table.add_column("Metric", style="bright_yellow")
     table.add_column("Value", style="white")
-    table.add_row("estimated stored", _format_tokens(estimated_tokens))
+    table.add_row("context source", str(snapshot["context_source"]))
+    runtime_global = snapshot.get("runtime_global")
+    if isinstance(runtime_global, dict):
+        table.add_row(
+            "global usage",
+            f"~{_format_tokens(estimated_tokens)} / {_format_tokens(int(runtime_global['effective_input_budget']))}",
+        )
+        table.add_row("global trigger", _format_tokens(int(runtime_global["trigger_tokens"])))
+        table.add_row("compressed", "yes" if runtime_global.get("compressed") else "no")
+        table.add_row("within budget", "yes" if runtime_global.get("within_budget") else "no")
+    else:
+        table.add_row("estimated stored", _format_tokens(estimated_tokens))
     if isinstance(model_window, int):
         table.add_row("model window", f"{_format_tokens(estimated_tokens)} / {_format_tokens(model_window)}")
         table.add_row("model usage", _format_percent(estimated_tokens / model_window))

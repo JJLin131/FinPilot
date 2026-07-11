@@ -4,6 +4,7 @@ from finpilot.agent.graph import FinPilotGraph
 from finpilot.agent.router import IntentRouter
 from finpilot.agent.tools import ToolRegistry
 from finpilot.config import settings
+from finpilot.context.compression import ContextEventCallback
 from finpilot.memory.service import MemoryManager
 from finpilot.models import AgentChatResponse
 from finpilot.observability import setup_langfuse
@@ -21,6 +22,7 @@ class FinPilotService:
         audit_store: AuditStore | None = None,
         memory_manager: MemoryManager | None = None,
         safety: SafetyReviewService | None = None,
+        context_event_callback: ContextEventCallback | None = None,
     ):
         setup_tracing()
         setup_langfuse()
@@ -32,7 +34,14 @@ class FinPilotService:
             self.rag_service.bootstrap_resources()
         self.tools = ToolRegistry(self.rag_service, safety=self.safety)
         self.router = IntentRouter()
-        self.graph = FinPilotGraph(self.router, self.tools, self.audit_store, self.memory_manager, safety=self.safety)
+        self.graph = FinPilotGraph(
+            self.router,
+            self.tools,
+            self.audit_store,
+            self.memory_manager,
+            safety=self.safety,
+            context_event_callback=context_event_callback,
+        )
 
     def chat(self, user_id: str, chat_id: str, content: str) -> AgentChatResponse:
         response = self.graph.run(user_id, chat_id, content)
