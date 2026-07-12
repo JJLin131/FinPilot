@@ -1,10 +1,20 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from finpilot.config import Settings, settings
+
+
+def test_settings_env_file_is_anchored_to_project_root():
+    import finpilot.config as config
+
+    expected = Path(config.__file__).resolve().parent.parent / ".env"
+
+    assert Settings.model_config["env_file"] == expected
 
 
 def test_local_settings_allow_development_defaults():
