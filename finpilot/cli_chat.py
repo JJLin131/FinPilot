@@ -21,6 +21,7 @@ from prompt_toolkit.layout import HSplit, Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.styles import Style
+from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import Frame, TextArea
 
 from finpilot.agent.runtime_events import AgentRuntimeEvent
@@ -36,6 +37,23 @@ def format_tokens(value: int) -> str:
     if value >= 1_000:
         return f"{value / 1_000:.1f}".rstrip("0").rstrip(".") + "k"
     return str(value)
+
+
+def _truncate_cells(value: str, max_cells: int) -> str:
+    if max_cells <= 0:
+        return ""
+    if get_cwidth(value) <= max_cells:
+        return value
+    target = max(0, max_cells - 1)
+    result: list[str] = []
+    used = 0
+    for character in value:
+        width = get_cwidth(character)
+        if used + width > target:
+            break
+        result.append(character)
+        used += width
+    return "".join(result) + "…"
 
 
 @dataclass
@@ -613,7 +631,8 @@ class FinPilotChatApplication:
         return []
 
     def _runtime_plan_lines(self) -> list[str]:
-        lines = ["Execution Plan", "Node | Agent | Task | Depends On | Status | Duration"]
+        max_width = max(32, self.application.output.get_size().columns - 4)
+        lines = ["Execution Plan", "State     Duration | Node | Agent"]
         for node in self.runtime_state.plan.get("nodes", []):
             node_id = str(node["node_id"])
             status = self.runtime_state.node_statuses.get(node_id, "PENDING")
@@ -624,18 +643,19 @@ class FinPilotChatApplication:
                 duration_text = f"{self.runtime_state.node_elapsed[node_id]:.1f}s"
             else:
                 duration_text = "—"
-            lines.append(
-                " | ".join(
-                    [
-                        node_id,
-                        str(node.get("agent_name", "")),
-                        str(node.get("task", "")),
-                        ", ".join(node.get("depends_on", [])) or "—",
-                        status,
-                        duration_text,
-                    ]
-                )
-            )
+            symbol = {
+                "PENDING": "○",
+                "RUNNING": "◉",
+                "SUCCEEDED": "✓",
+                "FAILED": "✗",
+                "BLOCKED": "!",
+                "SKIPPED": "↷",
+            }.get(status, "·")
+            prefix = f"{symbol} {status:<9} {duration_text:>8} | "
+            identity = f"{node_id} | {node.get('agent_name', '')}"
+            lines.append(prefix + _truncate_cells(identity, max_width - get_cwidth(prefix)))
+            lines.append(f"  Task: {node.get('task', '')}")
+            lines.append(f"  Depends On: {', '.join(node.get('depends_on', [])) or '—'}")
         return lines
 
     def _persist_runtime_summary(self) -> None:

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from prompt_toolkit.input import DummyInput
 from prompt_toolkit.input.defaults import create_pipe_input
 from prompt_toolkit.output import DummyOutput
+from prompt_toolkit.utils import get_cwidth
 
 from finpilot import cli
 from finpilot.agent.runtime_events import AgentRuntimeEvent
@@ -296,6 +297,49 @@ def test_persistent_chat_passes_runtime_callback_and_keeps_final_plan_summary():
     assert "Execution Plan" in app.output_text
     assert "QueryAgent" in app.output_text
     assert "SUCCEEDED" in app.output_text
+
+
+def test_execution_plan_keeps_status_row_within_terminal_width_for_long_task():
+    app = FinPilotChatApplication(
+        user_id="user-1",
+        chat_id="chat-1",
+        debug=False,
+        service_factory=lambda **kwargs: None,
+        input=DummyInput(),
+        output=DummyOutput(),
+    )
+    app.handle_runtime_event(
+        AgentRuntimeEvent(
+            request_id="req-1",
+            kind="PLAN_READY",
+            plan={
+                "status": "READY",
+                "nodes": [
+                    {
+                        "node_id": "fetch_user_account",
+                        "agent_name": "TreasuryDataAgent",
+                        "task": "使用 query_treasury_account 查询当前用户的所有财资账户，返回第一个可用账户的账号。",
+                        "depends_on": [],
+                    }
+                ],
+            },
+        )
+    )
+    app.handle_runtime_event(
+        AgentRuntimeEvent(
+            request_id="req-1",
+            kind="NODE_FINISHED",
+            node_id="fetch_user_account",
+            agent_name="TreasuryDataAgent",
+            node_status="SUCCEEDED",
+        )
+    )
+
+    lines = app._runtime_plan_lines()
+    status_line = next(line for line in lines if "SUCCEEDED" in line)
+
+    assert get_cwidth(status_line) <= app.application.output.get_size().columns
+    assert any("Task:" in line for line in lines)
 
 
 def test_switch_chat_restores_snapshot_from_current_process_cache():
