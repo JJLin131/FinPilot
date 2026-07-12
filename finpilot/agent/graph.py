@@ -9,6 +9,7 @@ from langgraph.graph import END, START, StateGraph
 
 from finpilot.agent.agents import FinanceQaSubAgent, TreasuryDataAgent, TreasuryOperationAgent
 from finpilot.agent.orchestration import AgentRegistration, ExecutionPlan, ExecutionPlanNode, ExecutionPlanningService, ExecutionScheduler
+from finpilot.agent.runtime_events import AgentRuntimeEvent, AgentRuntimeEventCallback, emit_runtime_event
 from finpilot.agent.prompts import build_execution_plan_prompt
 from finpilot.agent.runtime import CONTEXT_BUDGET_EXCEEDED_ANSWER
 from finpilot.agent.tools import ToolRegistry
@@ -46,6 +47,7 @@ class FinPilotGraph:
         planner: ExecutionPlanningService | None = None,
         answering_service: FinanceAnsweringService | None = None,
         context_event_callback: ContextEventCallback | None = None,
+        runtime_event_callback: AgentRuntimeEventCallback | None = None,
     ):
         del router
         self.tools = tools
@@ -55,6 +57,7 @@ class FinPilotGraph:
         self.planner = planner or ExecutionPlanningService()
         self.answering_service = answering_service or FinanceAnsweringService()
         self.context_event_callback = context_event_callback
+        self.runtime_event_callback = runtime_event_callback
         self.query_agent = FinanceQaSubAgent()
         self.treasury_data_agent = TreasuryDataAgent()
         self.treasury_operation_agent = TreasuryOperationAgent()
@@ -80,7 +83,10 @@ class FinPilotGraph:
                 memory_id=f"chat:{user_id}:{chat_id}",
                 user_message=content,
             )
-            final_state = self.graph.invoke(state.model_dump())
+            try:
+                final_state = self.graph.invoke(state.model_dump())
+            finally:
+                self._emit_runtime_event(AgentRuntimeEvent(request_id=request_id, kind="WORKFLOW_FINISHED"))
             graph_state = GraphState.model_validate(final_state)
             response = AgentChatResponse(
                 request_id=request_id,
@@ -207,12 +213,22 @@ class FinPilotGraph:
     def _plan_build(self, state: dict[str, Any]) -> dict[str, Any]:
         graph_state = GraphState.model_validate(state)
         with self._timed_span(graph_state, "agent.plan"):
+            self._emit_runtime_event(
+                AgentRuntimeEvent(request_id=graph_state.request_id, kind="PLANNER_STARTED")
+            )
             agents = self._agent_descriptors()
             session = build_session_context(graph_state)
             bundle = build_plan_prompt_bundle(session, agents, summary_cache={})
             self._record_context_bundle(graph_state, "planner", bundle)
             if bundle.status == "over_budget":
                 self._record_context_budget_issue(graph_state, bundle)
+                self._emit_runtime_event(
+                    AgentRuntimeEvent(
+                        request_id=graph_state.request_id,
+                        kind="PLAN_FAILED",
+                        failure_reason="Planner context budget exceeded.",
+                    )
+                )
                 return graph_state.model_dump()
             try:
                 plan = self.planner.plan(
@@ -220,6 +236,13 @@ class FinPilotGraph:
                     set(self._agent_instances()),
                 )
             except Exception as exc:
+                self._emit_runtime_event(
+                    AgentRuntimeEvent(
+                        request_id=graph_state.request_id,
+                        kind="PLAN_FAILED",
+                        failure_reason=str(exc),
+                    )
+                )
                 graph_state.issues.append(
                     dependency_degraded_issue(
                         code="EXECUTION_PLAN_FAILED",
@@ -236,6 +259,13 @@ class FinPilotGraph:
             graph_state.planning_reason = plan.reason
             graph_state.planning_attempts = plan.attempts
             graph_state.execution_plan = plan.model_dump(mode="json")
+            self._emit_runtime_event(
+                AgentRuntimeEvent(
+                    request_id=graph_state.request_id,
+                    kind="PLAN_READY",
+                    plan=graph_state.execution_plan,
+                )
+            )
             if plan.status == "UNSUPPORTED":
                 graph_state.final_answer = plan.reason
             return graph_state.model_dump()
@@ -247,7 +277,11 @@ class FinPilotGraph:
                 return graph_state.model_dump()
             try:
                 plan = ExecutionPlan.model_validate(graph_state.execution_plan)
-                scheduler = ExecutionScheduler(self._agent_registrations(graph_state))
+                scheduler = ExecutionScheduler(
+                    self._agent_registrations(graph_state),
+                    request_id=graph_state.request_id,
+                    event_callback=self.runtime_event_callback,
+                )
                 session = build_session_context(graph_state)
                 results = scheduler.execute(plan, session)
             except Exception as exc:
@@ -292,6 +326,9 @@ class FinPilotGraph:
                 if system_answer:
                     graph_state.final_answer = system_answer
                     return graph_state.model_dump()
+            self._emit_runtime_event(
+                AgentRuntimeEvent(request_id=graph_state.request_id, kind="ANSWER_STARTED")
+            )
             bundle = build_answer_prompt_bundle(
                 build_session_context(graph_state),
                 graph_state.answer_evidence,
@@ -307,6 +344,9 @@ class FinPilotGraph:
                 graph_state.issues.extend(consume())
             graph_state.scores["faithfulness"] = 1.0 if graph_state.evidence else 0.4
             return graph_state.model_dump()
+
+    def _emit_runtime_event(self, event: AgentRuntimeEvent) -> None:
+        emit_runtime_event(self.runtime_event_callback, event)
 
     def _agent_instances(self) -> dict[str, Any]:
         return {

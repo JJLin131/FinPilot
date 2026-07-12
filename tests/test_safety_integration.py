@@ -4,6 +4,7 @@ import pytest
 
 from finpilot.agent.graph import FinPilotGraph
 from finpilot.agent.orchestration import ExecutionPlan, ExecutionPlanNode
+from finpilot.agent.runtime_events import AgentRuntimeEvent
 from finpilot.agent.agents.finance_qa_subagent import FinanceQaSubAgent
 from finpilot.agent.router import IntentRouter
 from finpilot.agent.tools import ToolRegistry
@@ -359,6 +360,7 @@ def test_graph_blocks_unsafe_final_response():
 
 def test_graph_executes_plan_then_calls_unified_answer_with_merged_session_results():
     answering = RecordingAnswerService()
+    runtime_events: list[AgentRuntimeEvent] = []
     graph = FinPilotGraph(
         router=IntentRouter(classifier=StaticClassifier()),
         tools=NoopTools(),
@@ -366,6 +368,7 @@ def test_graph_executes_plan_then_calls_unified_answer_with_merged_session_resul
         memory_manager=FakeMemory(),
         planner=FixedPlanner(),
         answering_service=answering,
+        runtime_event_callback=runtime_events.append,
     )
     graph.query_agent = ExecutionOnlyQueryAgent()
 
@@ -377,10 +380,21 @@ def test_graph_executes_plan_then_calls_unified_answer_with_merged_session_resul
     assert context["session"]["subagent_results"][0]["summary"] == "命中付款规则"
     assert context["evidence"][0]["text"] == "付款规则正文"
     assert "loop" not in context
+    assert [event.kind for event in runtime_events] == [
+        "PLANNER_STARTED",
+        "PLAN_READY",
+        "NODE_STARTED",
+        "NODE_FINISHED",
+        "ANSWER_STARTED",
+        "WORKFLOW_FINISHED",
+    ]
+    assert runtime_events[1].plan["nodes"][0]["agent_name"] == "QueryAgent"
+    assert runtime_events[-1].request_id == response.request_id
 
 
 def test_graph_returns_failed_when_planner_and_repair_fail():
     answering = RecordingAnswerService()
+    runtime_events: list[AgentRuntimeEvent] = []
     graph = FinPilotGraph(
         router=IntentRouter(classifier=StaticClassifier()),
         tools=NoopTools(),
@@ -388,6 +402,7 @@ def test_graph_returns_failed_when_planner_and_repair_fail():
         memory_manager=FakeMemory(),
         planner=FailingPlanner(),
         answering_service=answering,
+        runtime_event_callback=runtime_events.append,
     )
     graph.query_agent = ExecutionOnlyQueryAgent()
 
@@ -397,3 +412,9 @@ def test_graph_returns_failed_when_planner_and_repair_fail():
     assert response.plan_debug["issues"][-1]["code"] == "EXECUTION_PLAN_FAILED"
     assert response.tool_calls == []
     assert answering.contexts == []
+    assert [event.kind for event in runtime_events] == [
+        "PLANNER_STARTED",
+        "PLAN_FAILED",
+        "WORKFLOW_FINISHED",
+    ]
+    assert runtime_events[1].failure_reason

@@ -9,6 +9,7 @@ from typing import Callable, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from finpilot.models import SessionContext, SubAgentResult
+from finpilot.agent.runtime_events import AgentRuntimeEvent, AgentRuntimeEventCallback, emit_runtime_event
 
 
 class ExecutionPlanNode(BaseModel):
@@ -82,9 +83,18 @@ class AgentRegistration:
 
 
 class ExecutionScheduler:
-    def __init__(self, registry: dict[str, AgentRegistration], *, max_parallelism: int = 3):
+    def __init__(
+        self,
+        registry: dict[str, AgentRegistration],
+        *,
+        max_parallelism: int = 3,
+        request_id: str = "",
+        event_callback: AgentRuntimeEventCallback | None = None,
+    ):
         self.registry = dict(registry)
         self.max_parallelism = max_parallelism
+        self.request_id = request_id
+        self.event_callback = event_callback
 
     def execute(self, plan: ExecutionPlan, session: SessionContext) -> list[SubAgentResult]:
         plan.validate_for_registry(set(self.registry), max_nodes=self.max_parallelism)
@@ -96,6 +106,7 @@ class ExecutionScheduler:
             skipped = self._skip_failed_dependencies(pending, results_by_node)
             if skipped:
                 for result in skipped:
+                    self._emit_node_finished(result)
                     results.append(result)
                     results_by_node[result.node_id] = result
                     session.subagent_results.append(result)
@@ -146,16 +157,42 @@ class ExecutionScheduler:
         return [results[node.node_id] for node in nodes]
 
     def _run_node(self, node: ExecutionPlanNode, session: SessionContext) -> SubAgentResult:
+        emit_runtime_event(
+            self.event_callback,
+            AgentRuntimeEvent(
+                request_id=self.request_id,
+                kind="NODE_STARTED",
+                node_id=node.node_id,
+                agent_name=node.agent_name,
+                task=node.task,
+            ),
+        )
         try:
-            return self.registry[node.agent_name].execute(node, session)
+            result = self.registry[node.agent_name].execute(node, session)
         except Exception as exc:
-            return SubAgentResult(
+            result = SubAgentResult(
                 node_id=node.node_id,
                 agent_name=node.agent_name,
                 task=node.task,
                 status="FAILED",
                 failure_reason=str(exc),
             )
+        self._emit_node_finished(result)
+        return result
+
+    def _emit_node_finished(self, result: SubAgentResult) -> None:
+        emit_runtime_event(
+            self.event_callback,
+            AgentRuntimeEvent(
+                request_id=self.request_id,
+                kind="NODE_FINISHED",
+                node_id=result.node_id,
+                agent_name=result.agent_name,
+                task=result.task,
+                node_status=result.status,
+                failure_reason=result.failure_reason,
+            ),
+        )
 
     @staticmethod
     def _skip_failed_dependencies(

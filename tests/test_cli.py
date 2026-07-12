@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typer.testing import CliRunner
 
 from finpilot import cli
+from finpilot.agent.runtime_events import AgentRuntimeEvent
 from finpilot.context.compression import ContextLifecycleEvent
 from finpilot.memory.models import ChatSessionSummary, ChatTurn
 from finpilot.models import AgentChatResponse, AgentEvidence, RouteDecision, ToolInvocation
@@ -16,7 +17,7 @@ from finpilot.safety.models import SafetyFinding
 runner = CliRunner()
 
 
-def test_default_service_factory_accepts_context_event_callback(monkeypatch):
+def test_default_service_factory_accepts_lifecycle_callbacks(monkeypatch):
     captured: dict[str, object] = {}
 
     class RecordingService:
@@ -27,9 +28,13 @@ def test_default_service_factory_accepts_context_event_callback(monkeypatch):
     def callback(event: ContextLifecycleEvent) -> None:
         return None
 
-    cli._default_service_factory(context_event_callback=callback)
+    def runtime_callback(event: AgentRuntimeEvent) -> None:
+        return None
+
+    cli._default_service_factory(context_event_callback=callback, runtime_event_callback=runtime_callback)
 
     assert captured["context_event_callback"] is callback
+    assert captured["runtime_event_callback"] is runtime_callback
 
 
 class FakeService:
@@ -120,31 +125,37 @@ def test_thinking_status_message_includes_elapsed(monkeypatch):
     assert "routing -> retrieving -> composing" in message
 
 
-def test_run_chat_shows_thinking_status_for_interactive_approval(monkeypatch):
+def test_run_chat_uses_runtime_progress_for_interactive_approval(monkeypatch):
     fake = FakeService()
-    statuses = []
+    captured: dict[str, object] = {}
 
-    class FakeStatus:
-        def __init__(self, message: str, **kwargs) -> None:
-            self.message = message
-            self.kwargs = kwargs
-            self.updates: list[str] = []
-
+    class FakeProgress:
         def __enter__(self):
-            statuses.append(self)
+            captured["entered"] = True
             return self
 
         def __exit__(self, exc_type, exc, tb):
+            captured["exited"] = True
             return False
 
-        def update(self, message: str) -> None:
-            self.updates.append(message)
+        def emit(self, event: AgentRuntimeEvent) -> None:
+            captured["event"] = event
 
-    def fake_status(message: str, **kwargs):
-        return FakeStatus(message, **kwargs)
+        def pause(self) -> None:
+            return None
 
-    monkeypatch.setattr(cli, "service_factory", lambda: fake)
-    monkeypatch.setattr(cli.console, "status", fake_status)
+        def resume(self) -> None:
+            return None
+
+    progress = FakeProgress()
+
+    def create_service(**kwargs):
+        captured.update(kwargs)
+        return fake
+
+    monkeypatch.setattr(cli, "CliRuntimeProgress", lambda **kwargs: progress)
+    monkeypatch.setattr(cli, "_create_service", create_service)
+    monkeypatch.setattr(cli, "_thinking_status", lambda message: (_ for _ in ()).throw(AssertionError(message)))
 
     response = cli._run_chat(
         user_id="user-1",
@@ -157,10 +168,9 @@ def test_run_chat_shows_thinking_status_for_interactive_approval(monkeypatch):
 
     assert response.answer
     assert fake.calls == [("user-1", "chat-1", "hello")]
-    assert statuses
-    assert "FinPilot is thinking" in statuses[0].message
-    assert "已思考" in statuses[0].message
-    assert statuses[0].kwargs["spinner"] == "dots"
+    assert captured["entered"] is True
+    assert captured["exited"] is True
+    assert captured["runtime_event_callback"] == progress.emit
 
 
 def test_chat_handles_slash_commands_and_message(monkeypatch, tmp_path):

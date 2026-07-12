@@ -11,6 +11,7 @@ from finpilot.agent.orchestration import (
     ExecutionPlanningService,
     ExecutionScheduler,
 )
+from finpilot.agent.runtime_events import AgentRuntimeEvent
 from finpilot.models import SessionContext, SubAgentResult
 
 
@@ -147,6 +148,72 @@ def test_scheduler_runs_independent_read_only_nodes_in_parallel():
 
     assert set(started) == {"knowledge", "account"}
     assert [result.status for result in results] == ["SUCCEEDED", "SUCCEEDED"]
+
+
+def test_scheduler_emits_start_and_finish_events_for_parallel_nodes():
+    barrier = threading.Barrier(2, timeout=1)
+    events: list[AgentRuntimeEvent] = []
+    event_lock = threading.Lock()
+
+    def execute(node: ExecutionPlanNode, session: SessionContext) -> SubAgentResult:
+        del session
+        barrier.wait()
+        return SubAgentResult(node_id=node.node_id, agent_name=node.agent_name, task=node.task, status="SUCCEEDED")
+
+    def record(event: AgentRuntimeEvent) -> None:
+        with event_lock:
+            events.append(event)
+
+    scheduler = ExecutionScheduler(
+        {
+            "QueryAgent": AgentRegistration("QueryAgent", "read_only", execute),
+            "TreasuryDataAgent": AgentRegistration("TreasuryDataAgent", "read_only", execute),
+        },
+        request_id="request-1",
+        event_callback=record,
+    )
+    plan = ExecutionPlan(
+        nodes=[
+            ExecutionPlanNode(node_id="knowledge", agent_name="QueryAgent", task="查规则"),
+            ExecutionPlanNode(node_id="account", agent_name="TreasuryDataAgent", task="查余额"),
+        ]
+    )
+
+    scheduler.execute(plan, _session())
+
+    assert {(event.kind, event.node_id) for event in events} == {
+        ("NODE_STARTED", "knowledge"),
+        ("NODE_FINISHED", "knowledge"),
+        ("NODE_STARTED", "account"),
+        ("NODE_FINISHED", "account"),
+    }
+    finished = {event.node_id: event for event in events if event.kind == "NODE_FINISHED"}
+    assert finished["knowledge"].node_status == "SUCCEEDED"
+    assert finished["account"].node_status == "SUCCEEDED"
+    assert all(event.request_id == "request-1" for event in events)
+
+
+def test_scheduler_ignores_runtime_event_callback_failures():
+    def execute(node: ExecutionPlanNode, session: SessionContext) -> SubAgentResult:
+        del session
+        return SubAgentResult(node_id=node.node_id, agent_name=node.agent_name, task=node.task, status="SUCCEEDED")
+
+    def fail_callback(event: AgentRuntimeEvent) -> None:
+        del event
+        raise RuntimeError("terminal unavailable")
+
+    scheduler = ExecutionScheduler(
+        {"QueryAgent": AgentRegistration("QueryAgent", "read_only", execute)},
+        request_id="request-1",
+        event_callback=fail_callback,
+    )
+
+    results = scheduler.execute(
+        ExecutionPlan(nodes=[ExecutionPlanNode(node_id="knowledge", agent_name="QueryAgent", task="查规则")]),
+        _session(),
+    )
+
+    assert results[0].status == "SUCCEEDED"
 
 
 def test_scheduler_passes_completed_dependency_results_to_next_layer():

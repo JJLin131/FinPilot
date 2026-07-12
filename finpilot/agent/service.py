@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from finpilot.agent.graph import FinPilotGraph
+from finpilot.agent.runtime_events import AgentRuntimeEventCallback
 from finpilot.agent.tools import ToolRegistry
 from finpilot.config import settings
 from finpilot.context.compression import ContextEventCallback
@@ -22,6 +23,7 @@ class FinPilotService:
         memory_manager: MemoryManager | None = None,
         safety: SafetyReviewService | None = None,
         context_event_callback: ContextEventCallback | None = None,
+        runtime_event_callback: AgentRuntimeEventCallback | None = None,
     ):
         setup_tracing()
         setup_langfuse()
@@ -38,6 +40,7 @@ class FinPilotService:
             memory_manager=self.memory_manager,
             safety=self.safety,
             context_event_callback=context_event_callback,
+            runtime_event_callback=runtime_event_callback,
         )
 
     def chat(self, user_id: str, chat_id: str, content: str) -> AgentChatResponse:

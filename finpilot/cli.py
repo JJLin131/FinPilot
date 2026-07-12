@@ -12,7 +12,7 @@ import warnings
 from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import typer
 from prompt_toolkit.application import Application
@@ -33,7 +33,9 @@ from rich.table import Table
 from rich.text import Text
 
 from finpilot.config import settings
+from finpilot.agent.runtime_events import AgentRuntimeEventCallback
 from finpilot.agent.tooling.file_access import FileAccessStore
+from finpilot.cli_progress import CliRuntimeProgress
 from finpilot.context.compression import ContextEventCallback, DEFAULT_CONTEXT_POLICIES, estimate_tokens
 from finpilot.cli_chat import FinPilotChatApplication
 from finpilot.memory.models import ChatSessionSummary, ChatTurn
@@ -71,7 +73,15 @@ ASSISTANT_BORDER = "bright_cyan"
 USER_BORDER = "bright_green"
 INFO_BORDER = "bright_blue"
 DEBUG_BORDER = "magenta"
-_ACTIVE_THINKING_STATUSES: list["_ThinkingStatus"] = []
+
+
+class _PausableStatus(Protocol):
+    def pause(self) -> None: ...
+
+    def resume(self) -> None: ...
+
+
+_ACTIVE_THINKING_STATUSES: list[_PausableStatus] = []
 
 console = Console()
 app = typer.Typer(
@@ -93,6 +103,7 @@ def _default_service_factory(
     interactive_approval: bool = False,
     approval_service: ApprovalService | None = None,
     context_event_callback: ContextEventCallback | None = None,
+    runtime_event_callback: AgentRuntimeEventCallback | None = None,
 ) -> "FinPilotService":
     _configure_cli_runtime()
     stderr = io.StringIO()
@@ -106,6 +117,7 @@ def _default_service_factory(
                 approval_service=approval_service,
             ),
             context_event_callback=context_event_callback,
+            runtime_event_callback=runtime_event_callback,
         )
 
 
@@ -469,10 +481,25 @@ def _run_chat(
 ) -> AgentChatResponse:
     service: FinPilotService | None = None
     try:
-        service = _create_service(interactive_approval=interactive_approval, approval_service=approval_service)
         if quiet:
+            service = _create_service(interactive_approval=interactive_approval, approval_service=approval_service)
             response = service.chat(user_id, chat_id, content)
+        elif interactive_approval:
+            with CliRuntimeProgress(console=console) as progress:
+                # 审批弹窗通过同一活动状态栈暂停并恢复 DAG 动态区域。
+                _ACTIVE_THINKING_STATUSES.append(progress)
+                try:
+                    service = _create_service(
+                        interactive_approval=True,
+                        approval_service=approval_service,
+                        runtime_event_callback=progress.emit,
+                    )
+                    response = service.chat(user_id, chat_id, content)
+                finally:
+                    if progress in _ACTIVE_THINKING_STATUSES:
+                        _ACTIVE_THINKING_STATUSES.remove(progress)
         else:
+            service = _create_service(interactive_approval=False, approval_service=approval_service)
             with _thinking_status(status_message):
                 response = service.chat(user_id, chat_id, content)
     except Exception as exc:
@@ -488,12 +515,14 @@ def _create_service(
     interactive_approval: bool = False,
     approval_service: ApprovalService | None = None,
     context_event_callback: ContextEventCallback | None = None,
+    runtime_event_callback: AgentRuntimeEventCallback | None = None,
 ) -> FinPilotService:
     if service_factory is _default_service_factory:
         return service_factory(
             interactive_approval=interactive_approval,
             approval_service=approval_service,
             context_event_callback=context_event_callback,
+            runtime_event_callback=runtime_event_callback,
         )
     return service_factory()
 
