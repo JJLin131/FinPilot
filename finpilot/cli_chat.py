@@ -270,6 +270,7 @@ class FinPilotChatApplication:
         self._active_command = ""
         self._thinking_started_at = 0.0
         self._runtime_summary_persisted = False
+        self._last_output_cursor = Point(x=0, y=0)
 
         self.output_control = FormattedTextControl(
             self._output_fragments,
@@ -563,6 +564,8 @@ class FinPilotChatApplication:
                     ("", "\n"),
                 ]
             )
+        # Prompt Toolkit 会分别请求文本与光标；两者必须引用同一次渲染快照。
+        self._last_output_cursor = Point(x=0, y=sum(text.count("\n") for _, text in fragments))
         return fragments
 
     def _runtime_progress_fragments(self) -> StyleAndTextTuples:
@@ -645,8 +648,7 @@ class FinPilotChatApplication:
         self._runtime_summary_persisted = True
 
     def _output_cursor_position(self) -> Point:
-        fragments = self._output_fragments()
-        return Point(x=0, y=sum(text.count("\n") for _, text in fragments))
+        return self._last_output_cursor
 
     def _append_panel(self, title: str, content: str, *, role: str) -> None:
         border_style = f"class:{role}.border"

@@ -412,6 +412,25 @@ def test_output_fragments_render_user_and_thinking_with_distinct_styles():
     assert "class:thinking.elapsed" in styles
 
 
+def test_output_cursor_uses_same_fragment_snapshot_when_event_arrives_between_callbacks():
+    app = FinPilotChatApplication(
+        user_id="user-1",
+        chat_id="chat-1",
+        debug=False,
+        service_factory=lambda **kwargs: None,
+        input=DummyInput(),
+        output=DummyOutput(),
+    )
+    app.busy = True
+    fragments = app._output_fragments()
+    rendered_max_y = sum(text.count("\n") for _, text in fragments)
+
+    app._post_event(("response", _response_with_context()))
+    cursor = app._output_cursor_position()
+
+    assert cursor.y <= rendered_max_y
+
+
 def test_response_fragments_restore_finpilot_frame_and_color():
     gate = threading.Event()
     gate.set()
