@@ -29,6 +29,14 @@ from finpilot.context.compression import ContextLifecycleEvent
 from finpilot.models import AgentChatResponse
 
 THINKING_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+_RUNTIME_STATUS_PRESENTATION = {
+    "PENDING": ("○", "class:context.value"),
+    "RUNNING": ("◉", "class:thinking.elapsed"),
+    "SUCCEEDED": ("✓", "class:context.ready"),
+    "FAILED": ("✗", "class:context.error"),
+    "BLOCKED": ("!", "class:context.error"),
+    "SKIPPED": ("↷", "class:context.warning"),
+}
 
 
 def format_tokens(value: int) -> str:
@@ -54,6 +62,34 @@ def _truncate_cells(value: str, max_cells: int) -> str:
         result.append(character)
         used += width
     return "".join(result) + "…"
+
+
+def _wrap_cells(value: str, max_cells: int) -> list[str]:
+    if max_cells <= 0:
+        return [""]
+    remaining = value or "—"
+    lines: list[str] = []
+    while get_cwidth(remaining) > max_cells:
+        used = 0
+        cut = 0
+        last_space = -1
+        for index, character in enumerate(remaining):
+            width = max(0, get_cwidth(character))
+            if used + width > max_cells:
+                break
+            used += width
+            cut = index + 1
+            if character.isspace():
+                last_space = cut
+        if last_space > 0:
+            lines.append(remaining[:last_space].rstrip())
+            remaining = remaining[last_space:].lstrip()
+        else:
+            cut = max(1, cut)
+            lines.append(remaining[:cut])
+            remaining = remaining[cut:]
+    lines.append(remaining.rstrip())
+    return lines
 
 
 @dataclass
@@ -592,8 +628,7 @@ class FinPilotChatApplication:
         frame = THINKING_FRAMES[int(elapsed * 10) % len(THINKING_FRAMES)]
         fragments: StyleAndTextTuples = [("", "\n")]
         if self.runtime_state.plan:
-            for line in self._runtime_plan_lines():
-                fragments.append(("class:context.value", f"{line}\n"))
+            fragments.extend(self._runtime_plan_fragments())
         labels = (
             [f"FinPilot is compressing context · 已用时 {now - self.context_state.status_started_at:.1f}s"]
             if self.context_state.status == "compressing"
@@ -630,41 +665,88 @@ class FinPilotChatApplication:
             return [f"FinPilot is scheduling DAG tasks... · 已用时 {state.elapsed(now):.1f}s"]
         return []
 
-    def _runtime_plan_lines(self) -> list[str]:
-        max_width = max(32, self.application.output.get_size().columns - 4)
-        lines = ["Execution Plan", "State     Duration | Node | Agent"]
-        for node in self.runtime_state.plan.get("nodes", []):
-            node_id = str(node["node_id"])
-            status = self.runtime_state.node_statuses.get(node_id, "PENDING")
-            if status == "RUNNING" and node_id in self.runtime_state.node_started_at:
-                duration = time.perf_counter() - self.runtime_state.node_started_at[node_id]
-                duration_text = f"{duration:.1f}s"
-            elif node_id in self.runtime_state.node_elapsed:
-                duration_text = f"{self.runtime_state.node_elapsed[node_id]:.1f}s"
-            else:
-                duration_text = "—"
-            symbol = {
-                "PENDING": "○",
-                "RUNNING": "◉",
-                "SUCCEEDED": "✓",
-                "FAILED": "✗",
-                "BLOCKED": "!",
-                "SKIPPED": "↷",
-            }.get(status, "·")
-            prefix = f"{symbol} {status:<9} {duration_text:>8} | "
-            identity = f"{node_id} | {node.get('agent_name', '')}"
-            lines.append(prefix + _truncate_cells(identity, max_width - get_cwidth(prefix)))
-            lines.append(f"  Task: {node.get('task', '')}")
-            lines.append(f"  Depends On: {', '.join(node.get('depends_on', [])) or '—'}")
-        return lines
+    def _runtime_plan_fragments(self) -> StyleAndTextTuples:
+        width = max(2, int(self.application.output.get_size().columns))
+        inner_width = max(0, width - 2)
+        planner_suffix = (
+            f" · Planner {self.runtime_state.planner_elapsed:.1f}s"
+            if self.runtime_state.planner_elapsed is not None
+            else ""
+        )
+        title = _truncate_cells(f"─ Execution Plan{planner_suffix} ", inner_width)
+        fragments: StyleAndTextTuples = [
+            ("class:system.border", f"╭{title}{'─' * max(0, inner_width - get_cwidth(title))}╮\n")
+        ]
+        nodes = self.runtime_state.plan.get("nodes", [])
+        for index, node in enumerate(nodes):
+            if index:
+                fragments.append(("class:system.border", f"├{'─' * inner_width}┤\n"))
+            fragments.extend(self._runtime_node_fragments(node, inner_width))
+        fragments.append(("class:system.border", f"╰{'─' * inner_width}╯\n"))
+        return fragments
+
+    def _runtime_node_fragments(self, node: Mapping[str, Any], inner_width: int) -> StyleAndTextTuples:
+        node_id = str(node.get("node_id", ""))
+        status = self.runtime_state.node_statuses.get(node_id, "PENDING")
+        if status == "RUNNING" and node_id in self.runtime_state.node_started_at:
+            duration_text = f"{time.perf_counter() - self.runtime_state.node_started_at[node_id]:.1f}s"
+        elif node_id in self.runtime_state.node_elapsed:
+            duration_text = f"{self.runtime_state.node_elapsed[node_id]:.1f}s"
+        else:
+            duration_text = "—"
+        symbol, status_style = _RUNTIME_STATUS_PRESENTATION.get(status, ("·", "class:context.value"))
+        content_width = max(0, inner_width - 2)
+        status_part = (status_style, f"{symbol} {status}")
+        duration_part = ("class:thinking.elapsed", f"  {duration_text}")
+        status_parts: StyleAndTextTuples = [("class:system.border", "Status   "), status_part, duration_part]
+        if sum(get_cwidth(text) for _, text in status_parts) > content_width:
+            status_parts = [status_part, duration_part]
+        if sum(get_cwidth(text) for _, text in status_parts) > content_width:
+            status_parts = [status_part]
+        fragments = self._runtime_box_line(status_parts, inner_width)
+        fields = [
+            ("Node", node_id),
+            ("Agent", str(node.get("agent_name", ""))),
+            ("Task", str(node.get("task", ""))),
+            ("Depends", ", ".join(node.get("depends_on", [])) or "—"),
+        ]
+        field_content_width = max(1, inner_width - 2)
+        label_width = min(9, field_content_width)
+        value_width = max(1, field_content_width - label_width)
+        for label, value in fields:
+            for line_index, wrapped in enumerate(_wrap_cells(value, value_width)):
+                label_text = f"{label:<{label_width}}" if line_index == 0 else " " * label_width
+                fragments.extend(
+                    self._runtime_box_line(
+                        [("class:system.border", label_text), ("class:context.value", wrapped)],
+                        inner_width,
+                    )
+                )
+        return fragments
+
+    @staticmethod
+    def _runtime_box_line(parts: StyleAndTextTuples, inner_width: int) -> StyleAndTextTuples:
+        content_width = max(0, inner_width - 2)
+        used = sum(get_cwidth(text) for _, text in parts)
+        if used > content_width and parts:
+            style, text = parts[-1]
+            overflow = used - content_width
+            parts = [*parts[:-1], (style, _truncate_cells(text, max(0, get_cwidth(text) - overflow)))]
+            used = sum(get_cwidth(text) for _, text in parts)
+        padding = " " * max(0, content_width - used)
+        return [
+            ("class:system.border", "│ "),
+            *parts,
+            ("", padding),
+            ("class:system.border", " │\n"),
+        ]
 
     def _persist_runtime_summary(self) -> None:
         if self._runtime_summary_persisted or not self.runtime_state.plan:
             return
-        lines = self._runtime_plan_lines()[1:]
-        if self.runtime_state.planner_elapsed is not None:
-            lines.append(f"Planner generated plan · {self.runtime_state.planner_elapsed:.1f}s")
-        self._append_panel("Execution Plan", "\n".join(lines), role="system")
+        fragments = self._runtime_plan_fragments()
+        self._history_fragments.extend([("", "\n"), *fragments])
+        self.output_text += "\n" + "".join(text for _, text in fragments)
         self._runtime_summary_persisted = True
 
     def _output_cursor_position(self) -> Point:

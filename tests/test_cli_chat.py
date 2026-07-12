@@ -15,6 +15,7 @@ from finpilot.cli_chat import (
     FinPilotChatApplication,
     GlobalContextSnapshotCache,
     GlobalContextViewState,
+    _wrap_cells,
     format_global_context_fragments,
     global_context_snapshot,
     render_response_text,
@@ -335,11 +336,170 @@ def test_execution_plan_keeps_status_row_within_terminal_width_for_long_task():
         )
     )
 
-    lines = app._runtime_plan_lines()
+    lines = "".join(text for _, text in app._runtime_plan_fragments()).splitlines()
     status_line = next(line for line in lines if "SUCCEEDED" in line)
 
     assert get_cwidth(status_line) <= app.application.output.get_size().columns
-    assert any("Task:" in line for line in lines)
+    assert any("│ Task" in line for line in lines)
+
+
+def test_execution_plan_renders_one_bordered_dialog_with_node_sections():
+    app = FinPilotChatApplication(
+        user_id="user-1",
+        chat_id="chat-1",
+        debug=False,
+        service_factory=lambda **kwargs: None,
+        input=DummyInput(),
+        output=DummyOutput(),
+    )
+    nodes = [
+        {"node_id": "account", "agent_name": "TreasuryDataAgent", "task": "查询账户", "depends_on": []},
+        {"node_id": "balance", "agent_name": "TreasuryDataAgent", "task": "查询余额", "depends_on": ["account"]},
+        {
+            "node_id": "transfer",
+            "agent_name": "TreasuryOperationAgent",
+            "task": "创建转账",
+            "depends_on": ["balance"],
+        },
+    ]
+    app.handle_runtime_event(
+        AgentRuntimeEvent(request_id="req-1", kind="PLAN_READY", plan={"status": "READY", "nodes": nodes})
+    )
+    for node in nodes:
+        app.handle_runtime_event(
+            AgentRuntimeEvent(
+                request_id="req-1",
+                kind="NODE_FINISHED",
+                node_id=node["node_id"],
+                agent_name=node["agent_name"],
+                task=node["task"],
+                node_status="SUCCEEDED",
+            )
+        )
+
+    rendered = "".join(text for _, text in app._runtime_progress_fragments())
+
+    assert rendered.count("╭─ Execution Plan") == 1
+    assert rendered.count("├") == 2
+    assert "╰" in rendered and "╯" in rendered
+    assert "│ Status" in rendered
+    assert "│ Task" in rendered
+
+
+def test_execution_plan_bordered_status_survives_narrow_terminal_with_long_task():
+    app = FinPilotChatApplication(
+        user_id="user-1",
+        chat_id="chat-1",
+        debug=False,
+        service_factory=lambda **kwargs: None,
+        input=DummyInput(),
+        output=DummyOutput(),
+    )
+    app.application.output.get_size = lambda: SimpleNamespace(rows=40, columns=48)
+    node = {
+        "node_id": "fetch_user_account",
+        "agent_name": "TreasuryDataAgent",
+        "task": "使用 query_treasury_account 查询当前用户的所有财资账户，返回第一个可用账户的账号。",
+        "depends_on": [],
+    }
+    app.handle_runtime_event(
+        AgentRuntimeEvent(
+            request_id="req-1",
+            kind="PLAN_READY",
+            plan={"status": "READY", "nodes": [node]},
+        )
+    )
+    app.handle_runtime_event(
+        AgentRuntimeEvent(
+            request_id="req-1",
+            kind="NODE_FINISHED",
+            node_id=node["node_id"],
+            agent_name=node["agent_name"],
+            task=node["task"],
+            node_status="SUCCEEDED",
+        )
+    )
+
+    rendered = "".join(text for _, text in app._runtime_progress_fragments())
+    lines = rendered.splitlines()
+    boxed_lines = [line for line in lines if line.startswith(("╭", "│", "├", "╰"))]
+
+    assert all(get_cwidth(line) == 48 for line in boxed_lines)
+    assert any(line.startswith("│ Status") and "SUCCEEDED" in line for line in lines)
+    assert "S\nUCCEEDED" not in rendered
+
+
+def test_execution_plan_wraps_english_task_at_word_boundaries():
+    assert _wrap_cells("retrieve source account ID", 17) == ["retrieve source", "account ID"]
+
+
+def test_execution_plan_keeps_complete_status_inside_twenty_column_border():
+    app = FinPilotChatApplication(
+        user_id="user-1",
+        chat_id="chat-1",
+        debug=False,
+        service_factory=lambda **kwargs: None,
+        input=DummyInput(),
+        output=DummyOutput(),
+    )
+    app.application.output.get_size = lambda: SimpleNamespace(rows=40, columns=20)
+    node = {"node_id": "a", "agent_name": "Agent", "task": "task", "depends_on": []}
+    app.handle_runtime_event(
+        AgentRuntimeEvent(request_id="req-1", kind="PLAN_READY", plan={"status": "READY", "nodes": [node]})
+    )
+    app.handle_runtime_event(
+        AgentRuntimeEvent(
+            request_id="req-1",
+            kind="NODE_FINISHED",
+            node_id="a",
+            agent_name="Agent",
+            task="task",
+            node_status="SUCCEEDED",
+        )
+    )
+
+    rendered = "".join(text for _, text in app._runtime_plan_fragments())
+    boxed_lines = [line for line in rendered.splitlines() if line.startswith(("╭", "│", "├", "╰"))]
+
+    assert all(get_cwidth(line) == 20 for line in boxed_lines)
+    assert "✓ SUCCEEDED" in rendered
+
+
+def test_live_and_persisted_execution_plan_share_bordered_structure():
+    app = FinPilotChatApplication(
+        user_id="user-1",
+        chat_id="chat-1",
+        debug=False,
+        service_factory=lambda **kwargs: None,
+        input=DummyInput(),
+        output=DummyOutput(),
+    )
+    app.handle_runtime_event(
+        AgentRuntimeEvent(
+            request_id="req-1",
+            kind="PLAN_READY",
+            plan={
+                "status": "READY",
+                "nodes": [
+                    {"node_id": "account", "agent_name": "TreasuryDataAgent", "task": "查询账户", "depends_on": []},
+                    {
+                        "node_id": "transfer",
+                        "agent_name": "TreasuryOperationAgent",
+                        "task": "创建转账",
+                        "depends_on": ["account"],
+                    },
+                ],
+            },
+        )
+    )
+
+    live = "".join(text for _, text in app._runtime_progress_fragments())
+    app._persist_runtime_summary()
+    history = "".join(text for _, text in app._history_fragments)
+
+    assert live.count("╭─ Execution Plan") == history.count("╭─ Execution Plan") == 1
+    assert live.count("├") == history.count("├") == 1
+    assert "╰" in live and "╰" in history
 
 
 def test_switch_chat_restores_snapshot_from_current_process_cache():
