@@ -789,7 +789,7 @@ def _status_models_table(snapshot: dict[str, object]) -> Table:
     table.add_column("Component", style="bright_cyan")
     table.add_column("Value", style="white")
     table.add_row("query", str(models["queryModel"]))
-    table.add_row("route", str(models["routeModel"]))
+    table.add_row("planner", str(models["plannerModel"]))
     table.add_row("embedding", str(models["embeddingModel"]))
     table.add_row("rewrite", str(models["rewriteModel"]))
     table.add_row("curation", str(models["curationModel"]))
@@ -876,14 +876,13 @@ def _render_issues(response: AgentChatResponse, *, debug: bool) -> None:
 
 
 def _render_debug(response: AgentChatResponse) -> None:
-    route = response.route
-    route_table = Table(title="Route", box=box.ROUNDED, border_style=DEBUG_BORDER, width=_panel_width())
-    route_table.add_column("Intent", style="bright_cyan")
-    route_table.add_column("Target", style="bright_green")
-    route_table.add_column("Confidence", style="bright_yellow")
-    route_table.add_column("Fallback", style="white")
-    route_table.add_row(route.normalized_intent, route.target_agent, f"{route.confidence:.2f}", route.fallback_cause)
-    console.print(route_table)
+    plan = response.plan or {}
+    plan_table = Table(title="Execution plan", box=box.ROUNDED, border_style=DEBUG_BORDER, width=_panel_width())
+    plan_table.add_column("Status", style="bright_cyan")
+    plan_table.add_column("Reason", style="white")
+    plan_table.add_column("Nodes", style="bright_green")
+    plan_table.add_row(str(plan.get("status", "PENDING")), str(plan.get("reason", "")), str(len(plan.get("nodes", []))))
+    console.print(plan_table)
     if response.tool_calls:
         tool_table = Table(title="Tool calls", box=box.ROUNDED, border_style=DEBUG_BORDER, width=_panel_width())
         tool_table.add_column("Step", style="dim")
@@ -900,8 +899,8 @@ def _render_debug(response: AgentChatResponse) -> None:
                 tool.observation_summary or "",
             )
         console.print(tool_table)
-    if response.route_debug:
-        console.print_json(json.dumps({"route_debug": response.route_debug}, ensure_ascii=False, default=str))
+    if response.plan_debug:
+        console.print_json(json.dumps({"plan_debug": response.plan_debug}, ensure_ascii=False, default=str))
     if response.retrieval_debug:
         console.print_json(json.dumps({"retrieval_debug": response.retrieval_debug}, ensure_ascii=False, default=str))
 
@@ -1146,7 +1145,7 @@ def _session_status_items(user_id: str, chat_id: str, debug: bool) -> list[tuple
         ("user", user_id),
         ("chat", chat_id),
         ("queryModel", _model_label()),
-        ("routeModel", _enabled_provider_model(settings.routing_llm_enabled, settings.routing_provider, settings.routing_model_name)),
+        ("plannerModel", _model_label()),
         ("embeddingModel", _enabled_value(settings.vector_enabled, settings.embedding_model_name)),
         ("rewriteModel", _enabled_value(settings.query_rewriter_enabled, settings.query_rewriter_model_name)),
         (

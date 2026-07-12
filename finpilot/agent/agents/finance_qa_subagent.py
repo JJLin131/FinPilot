@@ -3,24 +3,18 @@ from __future__ import annotations
 from finpilot.agent.runtime import AgentRuntime
 from finpilot.agent.tools import ToolRegistry
 from finpilot.config import settings
-from finpilot.intents import UNKNOWN_INTENT_ANSWER
 from finpilot.models import GraphState, SubAgentContext, SubAgentResult
 
 
 class FinanceQaSubAgent:
     name = "QueryAgent"
     context_policy = "finance_qa_agent"
-    supported_intents = {"FINANCE_KNOWLEDGE_QA", "GENERAL_KNOWLEDGE_QA"}
 
     def __init__(self, runtime: AgentRuntime | None = None):
         self.runtime = runtime or AgentRuntime()
 
     def handle(self, state: GraphState, tools: ToolRegistry) -> GraphState:
-        if state.normalized_intent in self.supported_intents:
-            return self.runtime.run(state, self.build_context(tools), tools)
-
-        state.final_answer = UNKNOWN_INTENT_ANSWER
-        return state
+        return self.runtime.run(state, self.build_context(tools), tools)
 
     def execute(self, state: GraphState, tools: ToolRegistry, *, node_id: str, task: str) -> SubAgentResult:
         return self.runtime.execute(state, self.build_context(tools), tools, node_id=node_id, task=task)

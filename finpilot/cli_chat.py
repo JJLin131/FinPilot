@@ -123,7 +123,7 @@ class _CommandCompleted:
 
 
 def global_context_snapshot(response: AgentChatResponse) -> dict[str, Any] | None:
-    debug = response.route_debug or {}
+    debug = response.plan_debug or response.route_debug or {}
     usage = debug.get("context_usage")
     if not isinstance(usage, dict):
         return None
@@ -143,7 +143,7 @@ def render_response_text(response: AgentChatResponse, *, debug: bool) -> str:
         lines.extend(["", "Tools"])
         lines.extend(f"- {tool.tool_name}: {tool.status}" for tool in response.tool_calls)
     if debug:
-        lines.extend(["", json.dumps({"route_debug": response.route_debug}, ensure_ascii=False, default=str)])
+        lines.extend(["", json.dumps({"plan_debug": response.plan_debug}, ensure_ascii=False, default=str)])
         lines.append(json.dumps({"retrieval_debug": response.retrieval_debug}, ensure_ascii=False, default=str))
     return "\n".join(lines)
 

@@ -11,9 +11,7 @@ from finpilot.agent.agents import FinanceQaSubAgent, TreasuryDataAgent, Treasury
 from finpilot.agent.orchestration import AgentRegistration, ExecutionPlan, ExecutionPlanNode, ExecutionPlanningService, ExecutionScheduler
 from finpilot.agent.prompts import build_execution_plan_prompt
 from finpilot.agent.runtime import CONTEXT_BUDGET_EXCEEDED_ANSWER
-from finpilot.agent.router import IntentRouter
 from finpilot.agent.tools import ToolRegistry
-from finpilot.intents import UNKNOWN_INTENT_ANSWER
 from finpilot.context.builders import build_answer_prompt_bundle, build_global_prompt_bundle, build_plan_prompt_bundle, build_session_context
 from finpilot.context.compression import ContextEventCallback
 from finpilot.issues import dependency_degraded_issue, issue_from_safety_finding, issue_from_tool_failure
@@ -24,7 +22,6 @@ from finpilot.models import (
     AgentEvidence,
     AgentIssue,
     GraphState,
-    RouteDecision,
     SafetyFinding,
     SubAgentResult,
     ToolInvocation,
@@ -40,7 +37,8 @@ SAFETY_BLOCKED_ANSWER = "请求被安全策略阻断，无法继续执行。"
 class FinPilotGraph:
     def __init__(
         self,
-        router: IntentRouter,
+        router: Any | None = None,
+        *,
         tools: ToolRegistry,
         audit_store: AuditStore,
         memory_manager: MemoryManager,
@@ -49,7 +47,7 @@ class FinPilotGraph:
         answering_service: FinanceAnsweringService | None = None,
         context_event_callback: ContextEventCallback | None = None,
     ):
-        self.router = router
+        del router
         self.tools = tools
         self.audit_store = audit_store
         self.memory_manager = memory_manager
@@ -84,7 +82,6 @@ class FinPilotGraph:
             )
             final_state = self.graph.invoke(state.model_dump())
             graph_state = GraphState.model_validate(final_state)
-            route = self._to_route(graph_state)
             response = AgentChatResponse(
                 request_id=request_id,
                 trace_id=trace_id,
@@ -92,14 +89,14 @@ class FinPilotGraph:
                 status=self._response_status(graph_state),
                 answer=graph_state.final_answer,
                 evidence=graph_state.evidence,
-                route=route,
+                plan=graph_state.execution_plan,
                 issues=graph_state.issues,
                 safety_findings=graph_state.safety_findings,
-                route_debug={
-                    "classifier_intent": graph_state.classifier_intent,
-                    "embedding_top1": graph_state.embedding_top1,
-                    "embedding_top2": graph_state.embedding_top2,
-                    "fallback_cause": graph_state.fallback_cause,
+                plan_debug={
+                    "planning_status": graph_state.planning_status,
+                    "planning_reason": graph_state.planning_reason,
+                    "planning_attempts": graph_state.planning_attempts,
+                    "execution_plan": graph_state.execution_plan,
                     "issues": [issue.model_dump(mode="json") for issue in graph_state.issues],
                     "latency_breakdown": graph_state.latency_breakdown,
                     "loop_count": graph_state.loop_count,
@@ -123,9 +120,6 @@ class FinPilotGraph:
         builder = StateGraph(dict)
         builder.add_node("input_safety_review", self._input_safety_review)
         builder.add_node("context_load", self._context_load)
-        builder.add_node("intent_classify", self._intent_classify)
-        builder.add_node("embedding_score", self._embedding_score)
-        builder.add_node("route_decide", self._route_decide)
         builder.add_node("plan_build", self._plan_build)
         builder.add_node("dag_execute", self._dag_execute)
         builder.add_node("answer_compose", self._answer_compose)
@@ -140,11 +134,8 @@ class FinPilotGraph:
         builder.add_conditional_edges(
             "context_load",
             self._after_context_load,
-            {"continue": "intent_classify", "blocked": "response_safety_review"},
+            {"continue": "plan_build", "blocked": "response_safety_review"},
         )
-        builder.add_edge("intent_classify", "embedding_score")
-        builder.add_edge("embedding_score", "route_decide")
-        builder.add_edge("route_decide", "plan_build")
         builder.add_edge("plan_build", "dag_execute")
         builder.add_edge("dag_execute", "answer_compose")
         builder.add_edge("answer_compose", "response_safety_review")
@@ -213,67 +204,9 @@ class FinPilotGraph:
         graph_state = GraphState.model_validate(state)
         return "blocked" if graph_state.final_answer == CONTEXT_BUDGET_EXCEEDED_ANSWER else "continue"
 
-    def _intent_classify(self, state: dict[str, Any]) -> dict[str, Any]:
-        graph_state = GraphState.model_validate(state)
-        with self._timed_span(graph_state, "intent.classify"):
-            classification = self.router.classify_with_issues(graph_state.user_message)
-            graph_state.classifier_intent = classification.intent
-            graph_state.route_reason = classification.reason
-            graph_state.issues.extend(classification.issues)
-            graph_state.raw_intent_json = json.dumps(
-                {
-                    "intent": classification.intent,
-                    "reason": classification.reason,
-                    "issues": [issue.code for issue in classification.issues],
-                },
-                ensure_ascii=False,
-            )
-            return graph_state.model_dump()
-
-    def _embedding_score(self, state: dict[str, Any]) -> dict[str, Any]:
-        graph_state = GraphState.model_validate(state)
-        with self._timed_span(graph_state, "intent.embed_score"):
-            top1, top2, semantic_score, margin_score = self.router.embedding_score(graph_state.user_message)
-            graph_state.embedding_top1 = top1
-            graph_state.embedding_top2 = top2
-            graph_state.semantic_score = semantic_score
-            graph_state.margin_score = margin_score
-            return graph_state.model_dump()
-
-    def _route_decide(self, state: dict[str, Any]) -> dict[str, Any]:
-        graph_state = GraphState.model_validate(state)
-        with self._timed_span(graph_state, "route.decide"):
-            decision = self.router.route_from_scores(
-                graph_state.classifier_intent,
-                graph_state.route_reason,
-                graph_state.embedding_top1,
-                graph_state.embedding_top2,
-                graph_state.semantic_score,
-                graph_state.margin_score,
-                graph_state.issues,
-            )
-            graph_state.raw_intent_json = decision.raw_intent_json
-            graph_state.classifier_intent = decision.classifier_intent
-            graph_state.embedding_top1 = decision.embedding_top1_intent
-            graph_state.embedding_top2 = decision.embedding_top2_intent
-            graph_state.route_reason = decision.reason
-            graph_state.normalized_intent = decision.normalized_intent
-            graph_state.target_agent = decision.target_agent
-            graph_state.route_confidence = decision.confidence
-            graph_state.fallback_cause = decision.fallback_cause
-            graph_state.agreement_score = decision.agreement_score
-            graph_state.semantic_score = decision.semantic_score
-            graph_state.margin_score = decision.margin_score
-            if graph_state.issues and decision.normalized_intent != "UNKNOWN":
-                graph_state.issues = [issue.model_copy(update={"severity": "warning"}) for issue in graph_state.issues]
-            return graph_state.model_dump()
-
     def _plan_build(self, state: dict[str, Any]) -> dict[str, Any]:
         graph_state = GraphState.model_validate(state)
         with self._timed_span(graph_state, "agent.plan"):
-            if graph_state.normalized_intent == "UNKNOWN":
-                graph_state.final_answer = self._issue_answer(graph_state) or UNKNOWN_INTENT_ANSWER
-                return graph_state.model_dump()
             agents = self._agent_descriptors()
             session = build_session_context(graph_state)
             bundle = build_plan_prompt_bundle(session, agents, summary_cache={})
@@ -289,20 +222,28 @@ class FinPilotGraph:
             except Exception as exc:
                 graph_state.issues.append(
                     dependency_degraded_issue(
-                        code="EXECUTION_PLAN_DEGRADED",
+                        code="EXECUTION_PLAN_FAILED",
                         component="execution_planner",
-                        message="Execution planner failed; using the routed single-agent fallback.",
+                        message="Execution planner failed after the repair attempt.",
                         exc=exc,
-                    ).model_copy(update={"severity": "warning", "retryable": True})
+                    ).model_copy(update={"severity": "error", "retryable": True})
                 )
-                plan = self._fallback_plan(graph_state)
+                graph_state.planning_status = "FAILED"
+                graph_state.planning_reason = str(exc)
+                graph_state.planning_attempts = 2
+                return graph_state.model_dump()
+            graph_state.planning_status = plan.status
+            graph_state.planning_reason = plan.reason
+            graph_state.planning_attempts = plan.attempts
             graph_state.execution_plan = plan.model_dump(mode="json")
+            if plan.status == "UNSUPPORTED":
+                graph_state.final_answer = plan.reason
             return graph_state.model_dump()
 
     def _dag_execute(self, state: dict[str, Any]) -> dict[str, Any]:
         graph_state = GraphState.model_validate(state)
         with self._timed_span(graph_state, "agent.execute"):
-            if graph_state.final_answer:
+            if graph_state.final_answer or graph_state.planning_status in {"FAILED", "UNSUPPORTED"}:
                 return graph_state.model_dump()
             try:
                 plan = ExecutionPlan.model_validate(graph_state.execution_plan)
@@ -403,7 +344,6 @@ class FinPilotGraph:
                 local_state = parent_state.model_copy(deep=True)
                 local_state.global_context = {"session": session.model_dump(mode="json")}
                 local_state.subagent_results = [item.model_copy(deep=True) for item in session.subagent_results]
-                local_state.target_agent = current_agent.name
                 return current_agent.execute(
                     local_state,
                     self.tools,
@@ -417,18 +357,6 @@ class FinPilotGraph:
                 execute=execute,
             )
         return registrations
-
-    @staticmethod
-    def _fallback_plan(state: GraphState) -> ExecutionPlan:
-        return ExecutionPlan(
-            nodes=[
-                ExecutionPlanNode(
-                    node_id="routed-agent",
-                    agent_name=state.target_agent,
-                    task=state.user_message,
-                )
-            ]
-        )
 
     def _merge_execution_result(self, state: GraphState, result: SubAgentResult) -> None:
         for evidence in result.evidence_summary:
@@ -518,9 +446,6 @@ class FinPilotGraph:
         graph_state = GraphState.model_validate(state)
         with self._timed_span(graph_state, "audit.persist"):
             try:
-                decision = self._to_route(graph_state)
-                if decision.normalized_intent == "UNKNOWN" and not graph_state.issues:
-                    self.audit_store.record_unknown_intent(graph_state, decision)
                 for issue in graph_state.issues:
                     self.audit_store.record_issue(graph_state, issue)
                 for finding in graph_state.safety_findings:
@@ -540,42 +465,25 @@ class FinPilotGraph:
                 )
             return graph_state.model_dump()
 
-    def _to_route(self, state: GraphState) -> RouteDecision:
-        return RouteDecision(
-            raw_intent_json=state.raw_intent_json,
-            normalized_intent=state.normalized_intent,
-            reason=state.route_reason,
-            confidence=state.route_confidence,
-            valid=state.normalized_intent != "UNKNOWN",
-            target_agent=state.target_agent,
-            classifier_intent=state.classifier_intent,
-            embedding_top1_intent=state.embedding_top1,
-            embedding_top2_intent=state.embedding_top2,
-            fallback_cause=state.fallback_cause,
-            semantic_score=state.semantic_score,
-            margin_score=state.margin_score,
-            agreement_score=state.agreement_score,
-        )
-
     def _response_status(self, state: GraphState) -> str:
         # 状态在图执行末端统一收口，避免中间节点把系统故障误标成 unsupported。
         if any(issue.component == "safety" and issue.severity == "error" for issue in state.issues):
             return "FAILED"
+        if state.planning_status == "UNSUPPORTED":
+            return "UNSUPPORTED"
+        if state.planning_status == "FAILED":
+            return "FAILED"
         if state.issues:
-            if state.normalized_intent == "UNKNOWN":
-                return "FAILED"
             if not state.evidence and any(issue.severity == "error" for issue in state.issues):
                 return "FAILED"
             return "DEGRADED"
-        if state.normalized_intent == "UNKNOWN":
-            return "UNSUPPORTED"
         return "SUCCEEDED"
 
     def _issue_answer(self, state: GraphState) -> str:
         for issue in state.issues:
             if issue.severity == "error":
                 return issue.message
-        return state.issues[0].message if state.issues and state.normalized_intent == "UNKNOWN" else ""
+        return state.issues[0].message if state.issues else ""
 
     def _apply_safety_review(self, state: GraphState, result) -> None:
         if not result.findings:
@@ -596,7 +504,7 @@ class FinPilotGraph:
                     {
                         "user_id": state.user_id,
                         "chat_id": state.chat_id,
-                        "intent": state.normalized_intent,
+                        "planning_status": state.planning_status,
                     },
                 )
                 self._span.__enter__()

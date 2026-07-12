@@ -352,8 +352,6 @@ def test_chat_list_sessions_exits_without_prompt(monkeypatch):
 def test_cli_status_uses_runtime_model_settings(monkeypatch):
     monkeypatch.setattr(cli.settings, "ai_provider", "deepseek")
     monkeypatch.setattr(cli.settings, "ai_model_name", "query-model")
-    monkeypatch.setattr(cli.settings, "routing_provider", "deepseek")
-    monkeypatch.setattr(cli.settings, "routing_model_name", "route-model")
     monkeypatch.setattr(cli.settings, "embedding_model_name", "embed-model")
     monkeypatch.setattr(cli.settings, "query_rewriter_model_name", "rewrite-model")
     monkeypatch.setattr(cli.settings, "rag_curation_model_name", "curation-model")
@@ -363,7 +361,7 @@ def test_cli_status_uses_runtime_model_settings(monkeypatch):
     assert items["user"] == "user-1"
     assert items["chat"] == "chat-1"
     assert items["queryModel"] == "deepseek:query-model"
-    assert items["routeModel"] == "deepseek:route-model"
+    assert items["plannerModel"] == "deepseek:query-model"
     assert items["embeddingModel"] == "embed-model"
     assert items["rewriteModel"] == "rewrite-model"
     assert items["curationModel"] == "deepseek:curation-model"

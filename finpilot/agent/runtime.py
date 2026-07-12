@@ -151,7 +151,7 @@ class AgentRuntime:
     ) -> AgentDecision:
         if loop_context.step_index == 0:
             allowed = {tool.name for tool in subagent_context.allowed_tools} if subagent_context else set()
-            if "query_account_balance" in allowed and state.normalized_intent == "TREASURY_DATA_QUERY":
+            if "query_account_balance" in allowed:
                 return AgentDecision(
                     decision="act",
                     reason="Query treasury account balance with deterministic fallback.",
@@ -159,7 +159,7 @@ class AgentRuntime:
                     tool_args={"accountId": self._extract_identifier(state.user_message, "ACC-001")},
                     enough_information=False,
                 )
-            if "create_transfer_order" in allowed and state.normalized_intent == "TREASURY_OPERATION":
+            if "create_transfer_order" in allowed:
                 return AgentDecision(
                     decision="act",
                     reason="Create mock transfer order with deterministic fallback.",

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from finpilot.config import settings
-from finpilot.models import AgentIssue, EvalSuiteResult, GraphState, RouteDecision, ToolInvocation
+from finpilot.models import AgentIssue, EvalSuiteResult, GraphState, ToolInvocation
 from finpilot.mysql import connect_runtime_mysql
 from finpilot.safety.models import SafetyFinding
 from finpilot.safety.redaction import redact_value
@@ -16,10 +16,6 @@ from finpilot.safety.redaction import redact_value
 class AuditStore(ABC):
     @abstractmethod
     def record_tool(self, state: GraphState, invocation: ToolInvocation) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def record_unknown_intent(self, state: GraphState, decision: RouteDecision) -> None:
         raise NotImplementedError
 
     @abstractmethod
@@ -57,7 +53,7 @@ class FileAuditStore(AuditStore):
             },
         )
 
-    def record_unknown_intent(self, state: GraphState, decision: RouteDecision) -> None:
+    def record_unknown_intent(self, state: GraphState, decision: Any) -> None:
         self._append(
             "unknown_intent_audit.jsonl",
             {
@@ -93,8 +89,8 @@ class FileAuditStore(AuditStore):
                 "severity": issue.severity,
                 "retryable": issue.retryable,
                 "detail": issue.detail,
-                "route_intent": state.normalized_intent,
-                "fallback_cause": state.fallback_cause,
+                "planning_status": state.planning_status,
+                "planning_reason": state.planning_reason,
             },
         )
 
@@ -115,7 +111,7 @@ class FileAuditStore(AuditStore):
                 "message": finding.message,
                 "severity": finding.severity,
                 "detail": redact_value(finding.detail),
-                "route_intent": state.normalized_intent,
+                "planning_status": state.planning_status,
             },
         )
 
@@ -312,7 +308,7 @@ class MySqlAuditStore(AuditStore):
                     ),
                 )
 
-    def record_unknown_intent(self, state: GraphState, decision: RouteDecision) -> None:
+    def record_unknown_intent(self, state: GraphState, decision: Any) -> None:
         with self._connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
@@ -362,8 +358,8 @@ class MySqlAuditStore(AuditStore):
                         issue.severity,
                         1 if issue.retryable else 0,
                         issue.detail,
-                        state.normalized_intent,
-                        state.fallback_cause,
+                        state.planning_status,
+                        state.planning_reason,
                     ),
                 )
 
@@ -409,7 +405,7 @@ class MySqlAuditStore(AuditStore):
                         finding.message,
                         finding.severity,
                         json.dumps(redact_value(finding.detail), ensure_ascii=False),
-                        state.normalized_intent,
+                        state.planning_status,
                     ),
                 )
 

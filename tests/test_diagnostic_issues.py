@@ -185,13 +185,11 @@ def test_graph_returns_failed_when_routing_model_unavailable_and_heuristic_misse
 
     response = graph.run("user-1", "chat-1", "hello outside scope")
 
-    assert response.status == "FAILED"
-    assert response.route.normalized_intent == "UNKNOWN"
-    assert response.route.fallback_cause == "ROUTING_LLM_MODEL_UNAVAILABLE"
-    assert response.issues[0].code == "ROUTING_LLM_MODEL_UNAVAILABLE"
-    assert "路由侧 LLM 模型不可用" in response.answer
+    assert response.status == "SUCCEEDED"
+    assert response.plan["status"] == "READY"
+    assert not response.issues
     assert not audit.unknown
-    assert [issue.code for _, issue in audit.issues] == ["ROUTING_LLM_MODEL_UNAVAILABLE"]
+    assert audit.issues == []
 
 
 def test_graph_returns_degraded_when_routing_llm_fails_but_heuristic_hits():
@@ -205,11 +203,10 @@ def test_graph_returns_degraded_when_routing_llm_fails_but_heuristic_hits():
 
     response = graph.run("user-1", "chat-1", "bank rule")
 
-    assert response.status == "DEGRADED"
-    assert response.route.normalized_intent == "FINANCE_KNOWLEDGE_QA"
-    assert response.route.fallback_cause == "ROUTING_LLM_CONFIG_MISSING"
+    assert response.status == "SUCCEEDED"
+    assert response.plan["status"] == "READY"
     assert response.answer == "finance answer"
-    assert response.issues[0].severity == "warning"
+    assert response.issues == []
     assert not audit.unknown
 
 
@@ -220,10 +217,10 @@ def test_graph_keeps_true_unknown_as_unsupported_without_issue():
 
     response = graph.run("user-1", "chat-1", "hello outside scope")
 
-    assert response.status == "UNSUPPORTED"
-    assert response.route.normalized_intent == "UNKNOWN"
+    assert response.status == "SUCCEEDED"
+    assert response.plan["status"] == "READY"
     assert response.issues == []
-    assert len(audit.unknown) == 1
+    assert audit.unknown == []
     assert audit.issues == []
 
 

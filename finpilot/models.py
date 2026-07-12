@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from finpilot.safety.models import SafetyFinding
 
@@ -43,13 +43,15 @@ class AgentIssue(BaseModel):
 
 
 class RouteDecision(BaseModel):
-    raw_intent_json: str
-    normalized_intent: str
-    reason: str
-    confidence: float
-    valid: bool
-    target_agent: str
-    classifier_intent: str
+    """Deprecated input-only compatibility model; runtime routing is Planner-owned."""
+
+    raw_intent_json: str = ""
+    normalized_intent: str = ""
+    reason: str = ""
+    confidence: float = 0.0
+    valid: bool = False
+    target_agent: str = ""
+    classifier_intent: str = ""
     embedding_top1_intent: str | None = None
     embedding_top2_intent: str | None = None
     fallback_cause: str = "NONE"
@@ -81,8 +83,8 @@ class SessionContext(BaseModel):
     chat_id: str
     memory_id: str
     user_message: str
-    normalized_intent: str
-    target_agent: str
+    normalized_intent: str = ""
+    target_agent: str = ""
     recent_messages: list[dict[str, Any]] = Field(default_factory=list)
     structured_memory: dict[str, Any] = Field(default_factory=dict)
     semantic_memory: list[dict[str, Any]] = Field(default_factory=list)
@@ -145,12 +147,26 @@ class AgentChatResponse(BaseModel):
     status: str
     answer: str
     evidence: list[AgentEvidence] = Field(default_factory=list)
-    route: RouteDecision
+    plan: dict[str, Any] = Field(default_factory=dict)
+    route: RouteDecision | None = None
     issues: list[AgentIssue] = Field(default_factory=list)
     safety_findings: list[SafetyFinding] = Field(default_factory=list)
+    plan_debug: dict[str, Any] | None = None
     route_debug: dict[str, Any] | None = None
     retrieval_debug: dict[str, Any] | None = None
     tool_calls: list[ToolInvocation] | None = None
+
+    @model_validator(mode="after")
+    def migrate_legacy_route_input(self):
+        if not self.plan and self.route is not None:
+            status = "UNSUPPORTED" if self.route.target_agent == "UNSUPPORTED" else "READY"
+            nodes = [] if status == "UNSUPPORTED" else [
+                {"node_id": "legacy", "agent_name": self.route.target_agent, "task": "legacy test input", "depends_on": []}
+            ]
+            self.plan = {"status": status, "reason": self.route.reason, "nodes": nodes}
+        if self.plan_debug is None and self.route_debug is not None:
+            self.plan_debug = self.route_debug
+        return self
 
 
 class RagMatch(BaseModel):
@@ -168,6 +184,9 @@ class EvalCase(BaseModel):
     user_id: str = "eval-user"
     chat_id: str
     content: str
+    expected_planning_status: str | None = None
+    expected_agents: list[str] = Field(default_factory=list)
+    required_dependencies: list[list[str]] = Field(default_factory=list)
     expected_intent: str | None = None
     expected_agent: str | None = None
     expected_status: str | None = None
@@ -184,6 +203,14 @@ class EvalCase(BaseModel):
     requires_approval: bool = False
     privacy_forbidden_fields: list[str] = Field(default_factory=list)
     metric_tags: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def migrate_legacy_planning_expectations(self):
+        if self.expected_planning_status is None and self.expected_intent:
+            self.expected_planning_status = "UNSUPPORTED" if self.expected_intent == "UNKNOWN" else "READY"
+        if not self.expected_agents and self.expected_agent and self.expected_agent != "UNSUPPORTED":
+            self.expected_agents = [self.expected_agent]
+        return self
 
 
 class EvalSuiteResult(BaseModel):
@@ -202,18 +229,11 @@ class GraphState(BaseModel):
     chat_id: str
     memory_id: str
     user_message: str
-    normalized_intent: str = "UNKNOWN"
-    classifier_intent: str = "UNKNOWN"
-    embedding_top1: str | None = None
-    embedding_top2: str | None = None
-    raw_intent_json: str = ""
-    fallback_cause: str = "NONE"
-    target_agent: str = "UNSUPPORTED"
-    route_reason: str = ""
-    route_confidence: float = 0.0
-    semantic_score: float = 0.0
-    margin_score: float = 0.0
-    agreement_score: float = 0.0
+    planning_status: Literal["PENDING", "READY", "UNSUPPORTED", "FAILED"] = "PENDING"
+    planning_reason: str = ""
+    planning_attempts: int = 0
+    normalized_intent: str = ""
+    target_agent: str = ""
     issues: list[AgentIssue] = Field(default_factory=list)
     safety_findings: list[SafetyFinding] = Field(default_factory=list)
     retrieved_docs: list[RagMatch] = Field(default_factory=list)

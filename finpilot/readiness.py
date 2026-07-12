@@ -58,8 +58,6 @@ def _check_llm_config() -> ReadinessCheck:
     deepseek_features = []
     if settings.ai_provider.lower() == "deepseek":
         deepseek_features.append("ai")
-    if settings.routing_llm_enabled and settings.routing_provider.lower() == "deepseek":
-        deepseek_features.append("routing")
     if settings.rag_curation_enabled and settings.rag_curation_provider.lower() == "deepseek":
         deepseek_features.append("rag_curation")
     if settings.safety_response_llm_enabled and settings.safety_response_provider.lower() == "deepseek":

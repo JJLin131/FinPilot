@@ -126,7 +126,7 @@ class MemoryManager:
             chat_id = self._chat_id_from_memory_id(memory_id)
         if response is None:
             raise ValueError("response is required.")
-        if response.status not in {"FAILED", "UNSUPPORTED"} and response.route.normalized_intent != "UNKNOWN":
+        if response.status not in {"FAILED", "UNSUPPORTED"}:
             try:
                 self.chat_store.append_interaction(
                     user_id=user_id,
@@ -189,7 +189,7 @@ class MemoryManager:
                 chat_id=chat_id,
                 user_message=user_message,
                 assistant_answer=response.answer,
-                route=response.route,
+                plan=response.plan,
             )
             self.persist_extracted_memory(user_id, extracted)
         except Exception as exc:
@@ -263,11 +263,7 @@ class MemoryManager:
         has_forget_signal = self._has_forget_signal(user_message)
         if response.status in {"FAILED", "UNSUPPORTED"} and not has_forget_signal:
             return False
-        if response.route.normalized_intent == "UNKNOWN" and not has_forget_signal:
-            return False
         if not response.answer.strip():
-            return False
-        if response.answer == UNKNOWN_INTENT_ANSWER and not has_forget_signal:
             return False
         if has_forget_signal:
             return True

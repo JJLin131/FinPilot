@@ -230,14 +230,14 @@ def test_scheduler_skips_failed_dependencies_and_keeps_independent_branch():
 
 
 class FakePlanningClient:
-    def __init__(self, response: str) -> None:
-        self.response = response
+    def __init__(self, response: str | list[str]) -> None:
+        self.responses = [response] if isinstance(response, str) else list(response)
         self.prompts: list[str] = []
 
     def generate(self, prompt: str, *, model_name: str) -> str:
         del model_name
         self.prompts.append(prompt)
-        return self.response
+        return self.responses.pop(0) if len(self.responses) > 1 else self.responses[0]
 
 
 def test_planning_service_validates_llm_plan_against_registered_agents():
@@ -252,6 +252,44 @@ def test_planning_service_validates_llm_plan_against_registered_agents():
 
     assert [node.node_id for node in plan.nodes] == ["account", "transfer"]
     assert client.prompts == ["规划提示词"]
+
+
+def test_execution_plan_accepts_explicit_unsupported_result():
+    plan = ExecutionPlan(status="UNSUPPORTED", reason="No registered agent can handle this request.")
+
+    plan.validate_for_registry(REGISTERED_AGENTS)
+
+
+def test_execution_plan_rejects_ready_result_without_nodes():
+    plan = ExecutionPlan(status="READY", reason="Ready")
+
+    with pytest.raises(ValueError, match="at least one node"):
+        plan.validate_for_registry(REGISTERED_AGENTS)
+
+
+def test_planning_service_repairs_invalid_plan_once():
+    client = FakePlanningClient(
+        [
+            '{"status":"READY","reason":"bad","nodes":[{"node_id":"bad","agent_name":"UnknownAgent","task":"x"}]}',
+            '{"status":"READY","reason":"fixed","nodes":[{"node_id":"knowledge","agent_name":"QueryAgent","task":"answer"}]}',
+        ]
+    )
+    planner = ExecutionPlanningService(client=client, model_name="test-model")
+
+    plan = planner.plan("planning prompt", REGISTERED_AGENTS)
+
+    assert plan.status == "READY"
+    assert plan.reason == "fixed"
+    assert len(client.prompts) == 2
+    assert "unregistered agent" in client.prompts[1]
+
+
+def test_planning_service_raises_after_failed_repair():
+    client = FakePlanningClient(["not-json", "still-not-json"])
+    planner = ExecutionPlanningService(client=client, model_name="test-model")
+
+    with pytest.raises(ValueError, match="failed after 2 attempts"):
+        planner.plan("planning prompt", REGISTERED_AGENTS)
 
 
 def test_planning_service_rejects_unregistered_llm_node():

@@ -39,6 +39,8 @@ def build_execution_plan_prompt(prompt_context: dict[str, Any]) -> str:
 You are planning a controlled multi-agent execution DAG.
 Choose only agents listed in agents. Return JSON only with this schema:
 {{
+  "status": "READY|UNSUPPORTED",
+  "reason": "short planning or unsupported reason",
   "nodes": [
     {{
       "node_id": "unique short identifier",
@@ -51,6 +53,7 @@ Choose only agents listed in agents. Return JSON only with this schema:
 
 Use dependencies whenever an operation needs data from a prior agent.
 Independent read-only work may be placed in parallel nodes.
+When no registered agent can handle the request, return status UNSUPPORTED with an empty nodes list.
 
 Context:
 {json.dumps(prompt_context, ensure_ascii=False, indent=2)}

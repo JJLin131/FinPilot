@@ -45,8 +45,8 @@ class EvalRunner:
                     "content": case.content,
                 },
                 expected_output={
-                    "expected_intent": case.expected_intent,
-                    "expected_agent": case.expected_agent,
+                    "expected_planning_status": case.expected_planning_status,
+                    "expected_agents": case.expected_agents,
                     "expected_status": case.expected_status,
                     "expected_tool": case.expected_tool,
                     "expected_tool_status": case.expected_tool_status,
@@ -77,8 +77,8 @@ class EvalRunner:
                         "content": case.content,
                     },
                     "expected_output": {
-                        "expected_intent": case.expected_intent,
-                        "expected_agent": case.expected_agent,
+                        "expected_planning_status": case.expected_planning_status,
+                        "expected_agents": case.expected_agents,
                         "expected_status": case.expected_status,
                         "expected_tool": case.expected_tool,
                         "expected_tool_status": case.expected_tool_status,
@@ -145,23 +145,27 @@ class EvalRunner:
         actual_reranked_document_ids = self._extract_reranked_document_ids(response)
         privacy_leaks = self._find_privacy_leaks(case, response)
 
-        if case.expected_intent:
-            intent_ok = response.route.normalized_intent == case.expected_intent
-            checks["intent"] = intent_ok
+        actual_planning_status = str(response.plan.get("status", ""))
+        actual_agents = sorted(
+            {str(node.get("agent_name")) for node in response.plan.get("nodes", []) if node.get("agent_name")}
+        )
+        if case.expected_planning_status:
+            planning_ok = actual_planning_status == case.expected_planning_status
+            checks["planning_status"] = planning_ok
             score_trace(
                 response.trace_id,
-                name="eval.intent_match",
-                value=1.0 if intent_ok else 0.0,
-                metadata={"expected_intent": case.expected_intent, "actual_intent": response.route.normalized_intent},
+                name="eval.planning_status_match",
+                value=1.0 if planning_ok else 0.0,
+                metadata={"expected": case.expected_planning_status, "actual": actual_planning_status},
             )
-        if case.expected_agent:
-            agent_ok = response.route.target_agent == case.expected_agent
-            checks["target_agent"] = agent_ok
+        if case.expected_agents:
+            agents_ok = actual_agents == sorted(case.expected_agents)
+            checks["agents"] = agents_ok
             score_trace(
                 response.trace_id,
-                name="eval.target_agent_match",
-                value=1.0 if agent_ok else 0.0,
-                metadata={"expected_agent": case.expected_agent, "actual_agent": response.route.target_agent},
+                name="eval.agent_set_match",
+                value=1.0 if agents_ok else 0.0,
+                metadata={"expected": case.expected_agents, "actual": actual_agents},
             )
         if case.expected_status:
             status_ok = response.status == case.expected_status
@@ -295,12 +299,11 @@ class EvalRunner:
             "case": case.name,
             "suite": case.suite,
             "passed": passed,
-            "route": response.route.normalized_intent,
-            "expected_intent": case.expected_intent,
-            "actual_intent": response.route.normalized_intent,
-            "expected_agent": case.expected_agent,
-            "actual_agent": response.route.target_agent,
-            "fallback_cause": response.route.fallback_cause,
+            "planning_status": actual_planning_status,
+            "expected_planning_status": case.expected_planning_status,
+            "expected_agents": case.expected_agents,
+            "actual_agents": actual_agents,
+            "actual_agent": actual_agents[0] if len(actual_agents) == 1 else None,
             "expected_status": case.expected_status,
             "status": response.status,
             "expected_tool": case.expected_tool,
@@ -376,16 +379,16 @@ class EvalRunner:
         latencies = [detail["latency_ms"] for detail in details if detail.get("latency_ms") is not None]
         evidence_counts = [detail.get("evidence_count", 0) for detail in details]
         status_distribution = dict(Counter(detail["status"] for detail in details))
-        fallback_cause_distribution = dict(Counter(detail.get("fallback_cause", "NONE") for detail in details))
         tool_statuses = [
             detail.get("actual_tool_status")
             for detail in details
             if detail.get("expected_tool_status") and detail.get("actual_tool_status")
         ]
         metrics: dict[str, object] = {
-            "intent_accuracy": self._check_rate(details, "expected_intent", "intent"),
-            "target_agent_accuracy": self._check_rate(details, "expected_agent", "target_agent"),
-            "fallback_cause_distribution": fallback_cause_distribution,
+            "planning_status_accuracy": self._check_rate(details, "expected_planning_status", "planning_status"),
+            "agent_set_accuracy": self._check_rate(details, "expected_agents", "agents"),
+            "intent_accuracy": self._check_rate(details, "expected_planning_status", "planning_status"),
+            "target_agent_accuracy": self._check_rate(details, "expected_agents", "agents"),
             "status_distribution": status_distribution,
             "status_ratio_distribution": self._status_ratio_distribution(details),
             "status_match_rate": self._check_rate(details, "expected_status", "status"),
@@ -515,7 +518,8 @@ class EvalRunner:
                 payload["content"],
             )
             return {
-                "actual_intent": response.route.normalized_intent,
+                "planning_status": response.plan.get("status"),
+                "agents": [node.get("agent_name") for node in response.plan.get("nodes", [])],
                 "status": response.status,
                 "answer": response.answer,
                 "tool_calls": [tool.tool_name for tool in response.tool_calls or []],
@@ -529,10 +533,10 @@ class EvalRunner:
 
         def evaluator(item, output):
             expected = item["expected_output"]
-            actual_intent = output.get("actual_intent")
-            expected_intent = expected.get("expected_intent")
-            score = 1.0 if not expected_intent or actual_intent == expected_intent else 0.0
-            return {"name": "intent_match", "value": score, "comment": f"expected={expected_intent}, actual={actual_intent}"}
+            actual = output.get("planning_status")
+            expected_status = expected.get("expected_planning_status")
+            score = 1.0 if not expected_status or actual == expected_status else 0.0
+            return {"name": "planning_status_match", "value": score, "comment": f"expected={expected_status}, actual={actual}"}
 
         def tool_evaluator(item, output):
             expected_tool = item["expected_output"].get("expected_tool")

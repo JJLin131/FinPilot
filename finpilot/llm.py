@@ -7,7 +7,6 @@ from typing import Any
 import httpx
 
 from finpilot.config import settings
-from finpilot.intents import INTENT_ORDER
 from finpilot.issues import dependency_degraded_issue
 from finpilot.models import AgentIssue
 
@@ -123,66 +122,6 @@ User question:
         except Exception as exc:
             logger.warning("Query rewrite via remote Ollama failed, using original query: %s", exc)
             return [query]
-
-
-class IntentClassificationService:
-    PROMPT = """
-You are a finance intent classifier.
-Classify the user's request into exactly one of these intents:
-{intents}
-
-Return JSON only with this schema:
-{{"intent":"INTENT_NAME","reason":"short explanation"}}
-
-If the request is outside the supported domain, return UNKNOWN.
-
-User question:
-{query}
-"""
-
-    def __init__(self, client=None):
-        self.client = client or self._build_client()
-        self._issues: list[AgentIssue] = []
-
-    def _build_client(self):
-        if settings.routing_provider.lower() == "deepseek":
-            return DeepSeekChatClient(
-                model_name=settings.routing_model_name,
-                timeout_seconds=settings.query_rewriter_timeout_seconds,
-            )
-        return OllamaClient(
-            base_url=settings.ollama_base_url,
-            model_name=settings.routing_model_name,
-            timeout_seconds=settings.query_rewriter_timeout_seconds,
-        )
-
-    def classify(self, query: str) -> tuple[str, str]:
-        if not settings.routing_llm_enabled:
-            raise RuntimeError("Routing LLM is disabled.")
-        raw = self.client.generate(
-            self.PROMPT.format(intents=", ".join(INTENT_ORDER), query=query),
-            model_name=settings.routing_model_name,
-        )
-        payload = self._extract_json(raw)
-        intent = str(payload.get("intent", "UNKNOWN")).strip().upper()
-        reason = str(payload.get("reason", "")).strip() or "LLM classifier returned no reason."
-        if intent not in INTENT_ORDER:
-            intent = "UNKNOWN"
-        return intent, reason
-
-    def _extract_json(self, raw: str) -> dict:
-        text = raw.strip()
-        if "```" in text:
-            text = text.replace("```json", "```")
-            parts = [part.strip() for part in text.split("```") if part.strip()]
-            for part in parts:
-                if part.startswith("{") and part.endswith("}"):
-                    return json.loads(part)
-        start = text.find("{")
-        end = text.rfind("}")
-        if start >= 0 and end > start:
-            return json.loads(text[start : end + 1])
-        return json.loads(text)
 
 
 class FinanceAnsweringService:

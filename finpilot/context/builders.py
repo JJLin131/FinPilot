@@ -22,8 +22,6 @@ def build_session_context(state: GraphState) -> SessionContext:
                 "chat_id": state.chat_id,
                 "memory_id": state.memory_id,
                 "user_message": state.user_message,
-                "normalized_intent": state.normalized_intent,
-                "target_agent": state.target_agent,
                 "subagent_results": [item.model_dump(mode="json") for item in state.subagent_results],
             }
         )
@@ -33,8 +31,6 @@ def build_session_context(state: GraphState) -> SessionContext:
         chat_id=state.chat_id,
         memory_id=state.memory_id,
         user_message=state.user_message,
-        normalized_intent=state.normalized_intent,
-        target_agent=state.target_agent,
         recent_messages=state.recent_messages[-6:],
         structured_memory=dict(state.structured_memory),
         semantic_memory=state.semantic_memory[-8:],

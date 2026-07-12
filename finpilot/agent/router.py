@@ -7,7 +7,6 @@ from difflib import SequenceMatcher
 
 from finpilot.intents import INTENT_KEYWORDS, INTENT_ORDER
 from finpilot.issues import routing_llm_issue_from_exception
-from finpilot.llm import IntentClassificationService
 from finpilot.models import AgentIssue, RouteDecision
 
 ROUTE_THRESHOLD = 0.78
@@ -32,14 +31,17 @@ class ClassificationResult:
 
 
 class IntentRouter:
-    def __init__(self, classifier: IntentClassificationService | None = None):
-        self.classifier = classifier or IntentClassificationService()
+    def __init__(self, classifier=None):
+        self.classifier = classifier
 
     def classify(self, user_message: str) -> tuple[str, str]:
         result = self.classify_with_issues(user_message)
         return result.intent, result.reason
 
     def classify_with_issues(self, user_message: str) -> ClassificationResult:
+        if self.classifier is None:
+            intent, reason = self._heuristic_classify(user_message)
+            return ClassificationResult(intent=intent, reason=reason, issues=[])
         try:
             intent, reason = self.classifier.classify(user_message)
             return ClassificationResult(intent=intent, reason=reason, issues=[])

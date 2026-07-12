@@ -8,6 +8,7 @@ from finpilot.safety.models import SafetyFinding
 def prepare_chat_response(response: AgentChatResponse, *, debug_enabled: bool) -> AgentChatResponse:
     if not debug_enabled:
         # API 和 CLI 共用同一处脱敏逻辑，避免不同入口暴露不一致。
+        response.plan_debug = None
         response.route_debug = None
         response.retrieval_debug = None
         response.tool_calls = None

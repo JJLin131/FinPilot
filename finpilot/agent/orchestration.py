@@ -23,9 +23,18 @@ class ExecutionPlanNode(BaseModel):
 class ExecutionPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    status: Literal["READY", "UNSUPPORTED"] = "READY"
+    reason: str = ""
+    attempts: int = Field(default=1, exclude=True)
     nodes: list[ExecutionPlanNode] = Field(default_factory=list)
 
     def validate_for_registry(self, registered_agents: set[str], *, max_nodes: int = 3) -> None:
+        if self.status == "UNSUPPORTED":
+            if self.nodes:
+                raise ValueError("unsupported execution plan must not contain nodes")
+            if not self.reason.strip():
+                raise ValueError("unsupported execution plan must include a reason")
+            return
         if not self.nodes:
             raise ValueError("execution plan must contain at least one node")
         if len(self.nodes) > max_nodes:
@@ -179,10 +188,29 @@ class ExecutionPlanningService:
         self.model_name = model_name or self._model_name()
 
     def plan(self, prompt: str, registered_agents: set[str]) -> ExecutionPlan:
-        raw = self.client.generate(prompt, model_name=self.model_name)
-        plan = ExecutionPlan.model_validate(self._extract_json(raw))
-        plan.validate_for_registry(registered_agents)
-        return plan
+        current_prompt = prompt
+        last_error: Exception | None = None
+        for attempt in range(2):
+            try:
+                raw = self.client.generate(current_prompt, model_name=self.model_name)
+                plan = ExecutionPlan.model_validate(self._extract_json(raw))
+                plan.validate_for_registry(registered_agents)
+                return plan.model_copy(update={"attempts": attempt + 1})
+            except Exception as exc:
+                last_error = exc
+                if attempt == 0:
+                    current_prompt = self._repair_prompt(prompt, exc, registered_agents)
+        raise ValueError(f"execution planning failed after 2 attempts: {last_error}") from last_error
+
+    @staticmethod
+    def _repair_prompt(original_prompt: str, error: Exception, registered_agents: set[str]) -> str:
+        agents = ", ".join(sorted(registered_agents))
+        return (
+            f"{original_prompt}\n\n"
+            "The previous execution plan was invalid. Return a corrected JSON plan only.\n"
+            f"Validation error: {error}\n"
+            f"Registered agents: {agents}"
+        )
 
     @staticmethod
     def _extract_json(raw: str) -> dict:

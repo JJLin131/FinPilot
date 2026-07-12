@@ -50,6 +50,7 @@ def test_non_local_settings_reject_missing_deepseek_key():
         Settings(
             _env_file=None,
             app_env="docker",
+            deepseek_api_key="",
             mysql_user="finpilot",
             mysql_password="not-default-password",
             langfuse_enabled=False,
@@ -58,7 +59,6 @@ def test_non_local_settings_reject_missing_deepseek_key():
 
 def test_non_local_settings_reject_missing_deepseek_key_for_all_deepseek_features():
     for feature, overrides in {
-        "routing_provider": {"ai_provider": "ollama", "routing_provider": "deepseek", "routing_llm_enabled": True},
         "rag_curation_provider": {"ai_provider": "ollama", "rag_curation_provider": "deepseek", "rag_curation_enabled": True},
         "safety_response_provider": {
             "ai_provider": "ollama",
@@ -70,6 +70,7 @@ def test_non_local_settings_reject_missing_deepseek_key_for_all_deepseek_feature
             Settings(
                 _env_file=None,
                 app_env="docker",
+                deepseek_api_key="",
                 mysql_user="finpilot",
                 mysql_password="not-default-password",
                 langfuse_enabled=False,

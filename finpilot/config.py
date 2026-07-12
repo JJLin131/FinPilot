@@ -21,9 +21,6 @@ class Settings(BaseSettings):
     ai_model_name: str = "deepseek-v4-pro"
     ai_debug_trace: bool = False
 
-    routing_llm_enabled: bool = True
-    routing_provider: str = "deepseek"
-    routing_model_name: str = "deepseek-v4-pro"
     safety_response_llm_enabled: bool = False
     safety_response_provider: str = "deepseek"
     safety_response_model_name: str = "deepseek-v4-pro"
@@ -106,8 +103,6 @@ class Settings(BaseSettings):
         deepseek_features = []
         if self.ai_provider.lower() == "deepseek":
             deepseek_features.append("ai_provider")
-        if self.routing_llm_enabled and self.routing_provider.lower() == "deepseek":
-            deepseek_features.append("routing_provider")
         if self.rag_curation_enabled and self.rag_curation_provider.lower() == "deepseek":
             deepseek_features.append("rag_curation_provider")
         if self.safety_response_llm_enabled and self.safety_response_provider.lower() == "deepseek":

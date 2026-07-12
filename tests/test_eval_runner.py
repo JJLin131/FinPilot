@@ -319,7 +319,7 @@ def test_run_suite_aggregates_eval_metrics(tmp_path: Path):
     assert result.metrics["privacy_leak_count"] == 0
     assert result.metrics["status_distribution"] == {"SUCCEEDED": 1, "DEGRADED": 1, "FAILED": 1, "UNSUPPORTED": 1}
     assert result.metrics["status_ratio_distribution"] == {"FAILED": 0.25, "DEGRADED": 0.25, "UNSUPPORTED": 0.25}
-    assert result.metrics["fallback_cause_distribution"] == {"NONE": 3, "LOW_CONFIDENCE": 1}
+    assert result.metrics["planning_status_accuracy"]["value"] == 1.0
     assert result.metrics["average_latency_ms"] >= 0
     assert result.metrics["p95_latency_ms"] >= 0
     assert result.metrics["query_rewrite"]["rewrite_success_rate"]["status"] == "not_available"

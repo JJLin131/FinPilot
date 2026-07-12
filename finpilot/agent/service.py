@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from finpilot.agent.graph import FinPilotGraph
-from finpilot.agent.router import IntentRouter
 from finpilot.agent.tools import ToolRegistry
 from finpilot.config import settings
 from finpilot.context.compression import ContextEventCallback
@@ -33,12 +32,10 @@ class FinPilotService:
         if settings.rag_bootstrap_on_startup:
             self.rag_service.bootstrap_resources()
         self.tools = ToolRegistry(self.rag_service, safety=self.safety)
-        self.router = IntentRouter()
         self.graph = FinPilotGraph(
-            self.router,
-            self.tools,
-            self.audit_store,
-            self.memory_manager,
+            tools=self.tools,
+            audit_store=self.audit_store,
+            memory_manager=self.memory_manager,
             safety=self.safety,
             context_event_callback=context_event_callback,
         )
@@ -53,9 +50,9 @@ class FinPilotService:
         )
         score_trace(
             response.trace_id,
-            name="runtime.unknown_rate",
+            name="planner.unsupported_rate",
             value=1.0 if response.status == "UNSUPPORTED" else 0.0,
-            metadata={"intent": response.route.normalized_intent, "status": response.status},
+            metadata={"planning_status": response.plan.get("status"), "status": response.status},
         )
         score_trace(
             response.trace_id,

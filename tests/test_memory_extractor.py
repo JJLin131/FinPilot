@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from finpilot.memory.extractor import MemoryExtractor
-from finpilot.models import RouteDecision
 
 
 def test_memory_extractor_prompt_uses_readable_utf8_examples():
@@ -10,15 +9,7 @@ def test_memory_extractor_prompt_uses_readable_utf8_examples():
         chat_id="chat-1",
         user_message="我每个月12号会发工资到工资卡。",
         assistant_answer="已记录你的发薪日偏好。",
-        route=RouteDecision(
-            raw_intent_json="{}",
-            normalized_intent="FINANCE_QA",
-            reason="test",
-            confidence=1.0,
-            valid=True,
-            target_agent="QueryAgent",
-            classifier_intent="FINANCE_QA",
-        ),
+        plan={"status": "READY", "nodes": [{"agent_name": "QueryAgent"}]},
     )
 
     assert '"city": "杭州"' in prompt

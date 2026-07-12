@@ -111,8 +111,8 @@ def sync_local_datasets(root: Path) -> None:
                         "content": payload["content"],
                     },
                     expected_output={
-                        "expected_intent": payload.get("expected_intent"),
-                        "expected_agent": payload.get("expected_agent"),
+                        "expected_planning_status": payload.get("expected_planning_status"),
+                        "expected_agents": payload.get("expected_agents", []),
                         "expected_status": payload.get("expected_status"),
                         "expected_tool": payload.get("expected_tool"),
                         "expected_tool_status": payload.get("expected_tool_status"),

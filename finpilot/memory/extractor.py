@@ -7,7 +7,6 @@ from finpilot.config import settings
 from finpilot.llm import DeepSeekChatClient, OllamaClient
 from finpilot.memory.definitions import render_memory_key_definitions
 from finpilot.memory.models import ExtractedMemory
-from finpilot.models import RouteDecision
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +49,7 @@ Allowed memory definitions:
 
 User id: {user_id}
 Chat id: {chat_id}
-Route intent: {intent}
+Selected agents: {selected_agents}
 
 User message:
 {user_message}
@@ -81,13 +80,15 @@ Assistant answer:
         chat_id: str,
         user_message: str,
         assistant_answer: str,
-        route: RouteDecision,
+        plan: dict,
     ) -> str:
         return self.PROMPT.format(
             definitions=render_memory_key_definitions(),
             user_id=user_id,
             chat_id=chat_id,
-            intent=route.normalized_intent,
+            selected_agents=", ".join(
+                sorted({str(node.get("agent_name")) for node in plan.get("nodes", []) if node.get("agent_name")})
+            ),
             user_message=user_message,
             assistant_answer=assistant_answer,
         )
@@ -99,7 +100,7 @@ Assistant answer:
         chat_id: str,
         user_message: str,
         assistant_answer: str,
-        route: RouteDecision,
+        plan: dict,
     ) -> ExtractedMemory:
         raw = self.client.generate(
             self.build_prompt(
@@ -107,7 +108,7 @@ Assistant answer:
                 chat_id=chat_id,
                 user_message=user_message,
                 assistant_answer=assistant_answer,
-                route=route,
+                plan=plan,
             ),
             model_name=settings.ai_model_name,
         )

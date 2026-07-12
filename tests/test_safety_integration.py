@@ -224,7 +224,7 @@ def test_graph_blocks_over_budget_context_before_router_or_subagent_runs():
 
     assert response.answer == "上下文超过模型可处理范围，请缩短当前输入或减少附加内容后重试。"
     assert any(issue.code == "CONTEXT_BUDGET_EXCEEDED" for issue in response.issues)
-    assert response.route_debug["context_usage"]["global"]["within_budget"] is False
+    assert response.plan_debug["context_usage"]["global"]["within_budget"] is False
 
 
 def test_graph_forwards_only_global_context_lifecycle_events():
@@ -240,10 +240,10 @@ def test_graph_forwards_only_global_context_lifecycle_events():
 
     response = graph.run("user-1", "chat-1", "工" * 500_000)
 
-    assert response.route_debug["context_usage"]["global"]["within_budget"] is False
+    assert response.plan_debug["context_usage"]["global"]["within_budget"] is False
     assert events
     assert {event.stage for event in events} == {"global"}
-    final_global = response.route_debug["context_usage"]["global"]
+    final_global = response.plan_debug["context_usage"]["global"]
     assert events[-1].estimated_tokens == final_global["estimated_tokens_after"]
 
 
@@ -379,7 +379,7 @@ def test_graph_executes_plan_then_calls_unified_answer_with_merged_session_resul
     assert "loop" not in context
 
 
-def test_graph_falls_back_to_routed_agent_when_planner_fails():
+def test_graph_returns_failed_when_planner_and_repair_fail():
     answering = RecordingAnswerService()
     graph = FinPilotGraph(
         router=IntentRouter(classifier=StaticClassifier()),
@@ -393,7 +393,7 @@ def test_graph_falls_back_to_routed_agent_when_planner_fails():
 
     response = graph.run("user-1", "chat-1", "rule")
 
-    assert response.answer == "统一回答"
-    assert response.route_debug["issues"][-1]["code"] == "EXECUTION_PLAN_DEGRADED"
+    assert response.status == "FAILED"
+    assert response.plan_debug["issues"][-1]["code"] == "EXECUTION_PLAN_FAILED"
     assert response.tool_calls == []
-    assert len(answering.contexts) == 1
+    assert answering.contexts == []

@@ -553,11 +553,9 @@ def test_global_context_uses_global_policy_and_keeps_original_state_unchanged():
     assert "global_context" in GraphState.model_fields
 
     state.global_context = bundle.payload
-    state.normalized_intent = "FINANCE_KNOWLEDGE_QA"
-    state.target_agent = "QueryAgent"
     routed_session = build_session_context(state)
-    assert routed_session.normalized_intent == "FINANCE_KNOWLEDGE_QA"
-    assert routed_session.target_agent == "QueryAgent"
+    assert routed_session.normalized_intent == ""
+    assert routed_session.target_agent == ""
 
 
 def test_model_context_window_reserves_output_tokens_from_input_budget():
