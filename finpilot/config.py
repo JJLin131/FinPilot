@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     deepseek_api_key: str | None = None
     ai_provider: str = "deepseek"
     ai_model_name: str = "deepseek-v4-pro"
+    ai_timeout_seconds: int = 120
     ai_debug_trace: bool = False
 
     safety_response_llm_enabled: bool = False

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 
+import httpx
 import pytest
 
 from finpilot.agent.orchestration import (
@@ -349,6 +350,37 @@ def test_planning_service_repairs_invalid_plan_once():
     assert plan.reason == "fixed"
     assert len(client.prompts) == 2
     assert "unregistered agent" in client.prompts[1]
+
+
+def test_planning_service_does_not_repair_transport_failure():
+    class TimeoutClient:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        def generate(self, prompt: str, *, model_name: str) -> str:
+            del model_name
+            self.prompts.append(prompt)
+            raise httpx.ReadTimeout("planner timed out")
+
+    client = TimeoutClient()
+    planner = ExecutionPlanningService(client=client, model_name="test-model")
+
+    with pytest.raises(httpx.ReadTimeout, match="planner timed out"):
+        planner.plan("planning prompt", REGISTERED_AGENTS)
+
+    assert client.prompts == ["planning prompt"]
+
+
+def test_planning_service_uses_ai_timeout_instead_of_query_rewriter_timeout(monkeypatch):
+    from finpilot.config import settings
+
+    monkeypatch.setattr(settings, "ai_provider", "deepseek")
+    monkeypatch.setattr(settings, "ai_timeout_seconds", 120, raising=False)
+    monkeypatch.setattr(settings, "query_rewriter_timeout_seconds", 1)
+
+    client = ExecutionPlanningService._build_client()
+
+    assert client.timeout_seconds == 120
 
 
 def test_planning_service_raises_after_failed_repair():

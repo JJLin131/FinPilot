@@ -144,12 +144,12 @@ Context:
         if settings.ai_provider.lower() == "deepseek":
             return DeepSeekChatClient(
                 model_name=settings.ai_model_name,
-                timeout_seconds=settings.query_rewriter_timeout_seconds,
+                timeout_seconds=settings.ai_timeout_seconds,
             )
         return OllamaClient(
             base_url=settings.ollama_base_url,
             model_name=settings.ai_model_name,
-            timeout_seconds=settings.query_rewriter_timeout_seconds,
+            timeout_seconds=settings.ai_timeout_seconds,
         )
 
     def answer_with_context(self, prompt_context: dict) -> str:

@@ -228,12 +228,12 @@ class ExecutionPlanningService:
         current_prompt = prompt
         last_error: Exception | None = None
         for attempt in range(2):
+            raw = self.client.generate(current_prompt, model_name=self.model_name)
             try:
-                raw = self.client.generate(current_prompt, model_name=self.model_name)
                 plan = ExecutionPlan.model_validate(self._extract_json(raw))
                 plan.validate_for_registry(registered_agents)
                 return plan.model_copy(update={"attempts": attempt + 1})
-            except Exception as exc:
+            except ValueError as exc:
                 last_error = exc
                 if attempt == 0:
                     current_prompt = self._repair_prompt(prompt, exc, registered_agents)
@@ -276,10 +276,10 @@ class ExecutionPlanningService:
         if settings.ai_provider.lower() == "deepseek":
             return DeepSeekChatClient(
                 model_name=settings.ai_model_name,
-                timeout_seconds=settings.query_rewriter_timeout_seconds,
+                timeout_seconds=settings.ai_timeout_seconds,
             )
         return OllamaClient(
             base_url=settings.ollama_base_url,
             model_name=settings.ai_model_name,
-            timeout_seconds=settings.query_rewriter_timeout_seconds,
+            timeout_seconds=settings.ai_timeout_seconds,
         )
