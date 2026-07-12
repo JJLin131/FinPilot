@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,16 +30,16 @@ class Settings(BaseSettings):
     safety_response_model_name: str = "deepseek-v4-pro"
     enable_demo_risk_tools: bool = False
     agent_tool_allowlists: dict[str, list[str]] = Field(default_factory=dict)
-    tool_access_path: Path = Field(default=Path("./data/tool-access.json"))
+    tool_access_path: Path = Field(default_factory=lambda: PROJECT_ROOT / "data/tool-access.json")
     brave_search_api_key: str | None = None
     web_search_timeout_seconds: int = 10
     web_fetch_max_chars: int = 6000
 
     audit_backend: str = "mysql"
-    audit_dir: Path = Field(default=Path("./data/python-audit"))
-    knowledge_dir: Path = Field(default=Path("./src/main/resources"))
+    audit_dir: Path = Field(default_factory=lambda: PROJECT_ROOT / "data/python-audit")
+    knowledge_dir: Path = Field(default_factory=lambda: PROJECT_ROOT / "src/main/resources")
     rag_bootstrap_on_startup: bool = False
-    bm25_index_path: Path = Field(default=Path("./data/bm25/knowledge.json"))
+    bm25_index_path: Path = Field(default_factory=lambda: PROJECT_ROOT / "data/bm25/knowledge.json")
     rrf_k: int = 60
 
     ollama_base_url: str = "http://100.92.110.54:11434"
@@ -98,6 +98,12 @@ class Settings(BaseSettings):
     mysql_user: str = "root"
     mysql_password: str = "123456"
     mysql_database: str = "work_memory"
+
+    @field_validator("tool_access_path", "audit_dir", "knowledge_dir", "bm25_index_path", mode="before")
+    @classmethod
+    def resolve_project_path(cls, value: str | Path) -> Path:
+        path = Path(value)
+        return path if path.is_absolute() else PROJECT_ROOT / path
 
     @model_validator(mode="after")
     def validate_non_local_runtime_settings(self):

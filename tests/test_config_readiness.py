@@ -17,6 +17,28 @@ def test_settings_env_file_is_anchored_to_project_root():
     assert Settings.model_config["env_file"] == expected
 
 
+def test_settings_resolve_relative_project_paths_from_project_root(tmp_path):
+    import finpilot.config as config
+
+    configured = Settings(
+        _env_file=None,
+        tool_access_path="custom/tool-access.json",
+        audit_dir="custom/audit",
+        knowledge_dir="custom/knowledge",
+        bm25_index_path="custom/bm25.json",
+    )
+
+    assert configured.tool_access_path == config.PROJECT_ROOT / "custom/tool-access.json"
+    assert configured.audit_dir == config.PROJECT_ROOT / "custom/audit"
+    assert configured.knowledge_dir == config.PROJECT_ROOT / "custom/knowledge"
+    assert configured.bm25_index_path == config.PROJECT_ROOT / "custom/bm25.json"
+
+    absolute_path = tmp_path / "absolute"
+    configured = Settings(_env_file=None, knowledge_dir=absolute_path)
+
+    assert configured.knowledge_dir == absolute_path
+
+
 def test_local_settings_allow_development_defaults():
     settings = Settings(_env_file=None)
 
