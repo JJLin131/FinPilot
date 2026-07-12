@@ -9,6 +9,7 @@ from prompt_toolkit.input.defaults import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
 from finpilot import cli
+from finpilot.agent.runtime_events import AgentRuntimeEvent
 from finpilot.cli_chat import (
     FinPilotChatApplication,
     GlobalContextSnapshotCache,
@@ -190,6 +191,113 @@ def test_compression_event_updates_thinking_copy():
     assert "FinPilot is compressing context" in app.thinking_text()
 
 
+def test_runtime_events_replace_generic_thinking_with_plan_and_running_agents():
+    app = FinPilotChatApplication(
+        user_id="user-1",
+        chat_id="chat-1",
+        debug=False,
+        service_factory=lambda **kwargs: None,
+        input=DummyInput(),
+        output=DummyOutput(),
+    )
+    app.busy = True
+    app.handle_runtime_event(AgentRuntimeEvent(request_id="req-1", kind="PLANNER_STARTED"))
+    app.handle_runtime_event(
+        AgentRuntimeEvent(
+            request_id="req-1",
+            kind="PLAN_READY",
+            plan={
+                "status": "READY",
+                "nodes": [
+                    {
+                        "node_id": "knowledge",
+                        "agent_name": "QueryAgent",
+                        "task": "查询财务规则",
+                        "depends_on": [],
+                    }
+                ],
+            },
+        )
+    )
+    app.handle_runtime_event(
+        AgentRuntimeEvent(
+            request_id="req-1",
+            kind="NODE_STARTED",
+            node_id="knowledge",
+            agent_name="QueryAgent",
+            task="查询财务规则",
+        )
+    )
+
+    text = "".join(fragment[1] for fragment in app._output_fragments())
+
+    assert "Execution Plan" in text
+    assert "QueryAgent is executing" in text
+    assert "FinPilot is thinking" not in text
+
+
+def test_persistent_chat_passes_runtime_callback_and_keeps_final_plan_summary():
+    captured: dict[str, object] = {}
+
+    class EventService:
+        def chat(self, user_id: str, chat_id: str, content: str) -> AgentChatResponse:
+            callback = captured["runtime_event_callback"]
+            callback(AgentRuntimeEvent(request_id="req-1", kind="PLANNER_STARTED"))
+            callback(
+                AgentRuntimeEvent(
+                    request_id="req-1",
+                    kind="PLAN_READY",
+                    plan={
+                        "status": "READY",
+                        "nodes": [
+                            {
+                                "node_id": "knowledge",
+                                "agent_name": "QueryAgent",
+                                "task": "查询财务规则",
+                                "depends_on": [],
+                            }
+                        ],
+                    },
+                )
+            )
+            callback(
+                AgentRuntimeEvent(
+                    request_id="req-1",
+                    kind="NODE_FINISHED",
+                    node_id="knowledge",
+                    agent_name="QueryAgent",
+                    task="查询财务规则",
+                    node_status="SUCCEEDED",
+                )
+            )
+            callback(AgentRuntimeEvent(request_id="req-1", kind="WORKFLOW_FINISHED"))
+            return _response_with_context()
+
+        def shutdown(self) -> None:
+            return None
+
+    def service_factory(**kwargs):
+        captured.update(kwargs)
+        return EventService()
+
+    app = FinPilotChatApplication(
+        user_id="user-1",
+        chat_id="chat-1",
+        debug=False,
+        service_factory=service_factory,
+        input=DummyInput(),
+        output=DummyOutput(),
+    )
+
+    app._run_request("hello")
+    app._drain_events()
+
+    assert callable(captured["runtime_event_callback"])
+    assert "Execution Plan" in app.output_text
+    assert "QueryAgent" in app.output_text
+    assert "SUCCEEDED" in app.output_text
+
+
 def test_switch_chat_restores_snapshot_from_current_process_cache():
     cache = GlobalContextSnapshotCache()
     cache.put("user-1", "chat-a", _snapshot(used=100, budget=1000, compressed=False))
@@ -298,7 +406,7 @@ def test_output_fragments_render_user_and_thinking_with_distinct_styles():
     app.wait_for_worker(timeout=1)
 
     assert "╭─ You" in rendered
-    assert "FinPilot is thinking" in rendered
+    assert "Planner is generating plan" in rendered
     assert "class:user.border" in styles
     assert "class:thinking.label" in styles
     assert "class:thinking.elapsed" in styles

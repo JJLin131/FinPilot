@@ -194,6 +194,7 @@ def chat_command(
                 interactive_approval=True,
                 approval_service=approval_service,
                 context_event_callback=kwargs.get("context_event_callback"),
+                runtime_event_callback=kwargs.get("runtime_event_callback"),
             ),
             command_handler=_capture_slash_command,
         )

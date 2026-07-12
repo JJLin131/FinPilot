@@ -196,6 +196,7 @@ def test_chat_handles_slash_commands_and_message(monkeypatch, tmp_path):
 
 def test_chat_uses_persistent_application_in_tty(monkeypatch, tmp_path):
     captured: dict[str, object] = {}
+    service_kwargs: dict[str, object] = {}
 
     class FakeChatApplication:
         def __init__(self, **kwargs):
@@ -210,6 +211,7 @@ def test_chat_uses_persistent_application_in_tty(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "_should_use_persistent_chat", lambda: True)
     monkeypatch.setattr(cli, "FinPilotChatApplication", FakeChatApplication)
     monkeypatch.setattr(cli, "_history_path", lambda: tmp_path / "history")
+    monkeypatch.setattr(cli, "_create_service", lambda **kwargs: service_kwargs.update(kwargs) or FakeService())
 
     result = runner.invoke(cli.app, ["chat", "--user-id", "user-1", "--chat-id", "chat-1"])
 
@@ -217,6 +219,17 @@ def test_chat_uses_persistent_application_in_tty(monkeypatch, tmp_path):
     assert captured["user_id"] == "user-1"
     assert captured["chat_id"] == "chat-1"
     assert captured["ran"] is True
+    def context_callback(event):
+        return None
+
+    def runtime_callback(event):
+        return None
+    captured["service_factory"](
+        context_event_callback=context_callback,
+        runtime_event_callback=runtime_callback,
+    )
+    assert service_kwargs["context_event_callback"] is context_callback
+    assert service_kwargs["runtime_event_callback"] is runtime_callback
 
 
 def test_cli_approval_decision_parses_once_session_and_deny():

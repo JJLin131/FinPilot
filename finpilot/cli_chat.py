@@ -23,6 +23,7 @@ from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame, TextArea
 
+from finpilot.agent.runtime_events import AgentRuntimeEvent
 from finpilot.context.compression import ContextLifecycleEvent
 from finpilot.models import AgentChatResponse
 
@@ -122,6 +123,74 @@ class _CommandCompleted:
     rendered: str
 
 
+@dataclass(frozen=True)
+class _RuntimeEventReceived:
+    event: AgentRuntimeEvent
+    occurred_at: float
+
+
+@dataclass
+class RuntimeProgressViewState:
+    stage: str = "planner"
+    plan: dict[str, Any] = field(default_factory=dict)
+    planner_started_at: float = field(default_factory=time.perf_counter)
+    planner_elapsed: float | None = None
+    stage_started_at: float = field(default_factory=time.perf_counter)
+    node_statuses: dict[str, str] = field(default_factory=dict)
+    node_details: dict[str, dict[str, Any]] = field(default_factory=dict)
+    node_started_at: dict[str, float] = field(default_factory=dict)
+    node_elapsed: dict[str, float] = field(default_factory=dict)
+    terminal_nodes: set[str] = field(default_factory=set)
+
+    def apply(self, event: AgentRuntimeEvent, occurred_at: float) -> None:
+        if event.kind == "PLANNER_STARTED":
+            self.stage = "planner"
+            self.planner_started_at = occurred_at
+            self.stage_started_at = occurred_at
+        elif event.kind == "PLAN_READY":
+            self.plan = dict(event.plan)
+            self.planner_elapsed = occurred_at - self.planner_started_at
+            self.stage = "execute"
+            self.stage_started_at = occurred_at
+            for node in self.plan.get("nodes", []):
+                node_id = str(node["node_id"])
+                self.node_details.setdefault(node_id, dict(node))
+                self.node_statuses.setdefault(node_id, "PENDING")
+        elif event.kind == "PLAN_FAILED":
+            self.stage = "planner_failed"
+            self.stage_started_at = occurred_at
+        elif event.kind == "NODE_STARTED" and event.node_id:
+            if event.node_id in self.terminal_nodes:
+                return
+            self.stage = "execute"
+            self.node_details.setdefault(
+                event.node_id,
+                {"node_id": event.node_id, "agent_name": event.agent_name, "task": event.task, "depends_on": []},
+            )
+            self.node_statuses[event.node_id] = "RUNNING"
+            self.node_started_at.setdefault(event.node_id, occurred_at)
+        elif event.kind == "NODE_FINISHED" and event.node_id:
+            if event.node_id in self.terminal_nodes:
+                return
+            self.node_details.setdefault(
+                event.node_id,
+                {"node_id": event.node_id, "agent_name": event.agent_name, "task": event.task, "depends_on": []},
+            )
+            status = event.node_status or "FAILED"
+            self.node_statuses[event.node_id] = status
+            self.terminal_nodes.add(event.node_id)
+            if event.node_id in self.node_started_at:
+                self.node_elapsed[event.node_id] = occurred_at - self.node_started_at[event.node_id]
+        elif event.kind == "ANSWER_STARTED":
+            self.stage = "answer"
+            self.stage_started_at = occurred_at
+        elif event.kind == "WORKFLOW_FINISHED":
+            self.stage = "finished"
+
+    def elapsed(self, now: float) -> float:
+        return max(0.0, now - self.stage_started_at)
+
+
 def global_context_snapshot(response: AgentChatResponse) -> dict[str, Any] | None:
     debug = response.plan_debug or response.route_debug or {}
     usage = debug.get("context_usage")
@@ -190,6 +259,7 @@ class FinPilotChatApplication:
         self.command_handler = command_handler
         self.snapshot_cache = snapshot_cache or GlobalContextSnapshotCache()
         self.context_state = GlobalContextViewState()
+        self.runtime_state = RuntimeProgressViewState()
         self.busy = False
         self.command_busy = False
         self.output_text = ""
@@ -199,6 +269,7 @@ class FinPilotChatApplication:
         self._command_worker: threading.Thread | None = None
         self._active_command = ""
         self._thinking_started_at = 0.0
+        self._runtime_summary_persisted = False
 
         self.output_control = FormattedTextControl(
             self._output_fragments,
@@ -293,6 +364,11 @@ class FinPilotChatApplication:
         self.busy = True
         self._append_panel("You", text.strip(), role="user")
         self._thinking_started_at = time.perf_counter()
+        self.runtime_state = RuntimeProgressViewState(
+            planner_started_at=self._thinking_started_at,
+            stage_started_at=self._thinking_started_at,
+        )
+        self._runtime_summary_persisted = False
         self._worker = threading.Thread(target=self._run_request, args=(text.strip(),), daemon=True)
         self._worker.start()
         self.application.invalidate()
@@ -359,7 +435,10 @@ class FinPilotChatApplication:
     def _run_request(self, text: str) -> None:
         service = None
         try:
-            service = self.service_factory(context_event_callback=self._post_event)
+            service = self.service_factory(
+                context_event_callback=self._post_event,
+                runtime_event_callback=self._post_runtime_event,
+            )
             response = service.chat(self.user_id, self.chat_id, text)
             self._post_event(("response", response))
         except Exception as exc:
@@ -375,6 +454,9 @@ class FinPilotChatApplication:
         self._events.put(event)
         self.application.invalidate()
 
+    def _post_runtime_event(self, event: AgentRuntimeEvent) -> None:
+        self._post_event(_RuntimeEventReceived(event=event, occurred_at=time.perf_counter()))
+
     def _drain_events(self) -> None:
         while True:
             try:
@@ -384,6 +466,9 @@ class FinPilotChatApplication:
             if isinstance(event, ContextLifecycleEvent):
                 self.handle_context_event(event)
                 continue
+            if isinstance(event, _RuntimeEventReceived):
+                self.runtime_state.apply(event.event, event.occurred_at)
+                continue
             if isinstance(event, _CommandCompleted):
                 self._apply_command_result(event)
                 continue
@@ -391,6 +476,7 @@ class FinPilotChatApplication:
                 continue
             kind, payload = event
             if kind == "response" and isinstance(payload, AgentChatResponse):
+                self._persist_runtime_summary()
                 snapshot = global_context_snapshot(payload)
                 if snapshot is not None:
                     self.context_state.apply_snapshot(snapshot)
@@ -401,6 +487,7 @@ class FinPilotChatApplication:
                     role="assistant",
                 )
             elif kind == "error":
+                self._persist_runtime_summary()
                 self.context_state.status = "failed"
                 self._append_panel("FinPilot error", str(payload), role="error")
             elif kind == "command_error":
@@ -422,6 +509,10 @@ class FinPilotChatApplication:
 
     def handle_context_event(self, event: ContextLifecycleEvent) -> None:
         self.context_state.apply_event(event)
+        self.application.invalidate()
+
+    def handle_runtime_event(self, event: AgentRuntimeEvent) -> None:
+        self.runtime_state.apply(event, time.perf_counter())
         self.application.invalidate()
 
     def switch_chat(self, chat_id: str) -> None:
@@ -452,30 +543,17 @@ class FinPilotChatApplication:
         return proxy
 
     def thinking_text(self) -> str:
-        label = "FinPilot is compressing context" if self.context_state.status == "compressing" else "FinPilot is thinking"
-        elapsed = max(0.0, time.perf_counter() - self._thinking_started_at)
-        return f"{label} · 已思考 {elapsed:.1f}s"
+        now = time.perf_counter()
+        if self.context_state.status == "compressing":
+            return f"FinPilot is compressing context · 已用时 {now - self.context_state.status_started_at:.1f}s"
+        labels = self._active_runtime_labels(now)
+        return "\n".join(labels)
 
     def _output_fragments(self) -> StyleAndTextTuples:
         self._drain_events()
         fragments = list(self._history_fragments)
         if self.busy:
-            elapsed = max(0.0, time.perf_counter() - self._thinking_started_at)
-            frame = THINKING_FRAMES[int(elapsed * 10) % len(THINKING_FRAMES)]
-            label = (
-                "FinPilot is compressing context"
-                if self.context_state.status == "compressing"
-                else "FinPilot is thinking"
-            )
-            fragments.extend(
-                [
-                    ("", "\n"),
-                    ("class:thinking.spinner", f"{frame} "),
-                    ("class:thinking.label", label),
-                    ("class:thinking.elapsed", f"  已思考 {elapsed:.1f}s"),
-                    ("", "\n"),
-                ]
-            )
+            fragments.extend(self._runtime_progress_fragments())
         if self.command_busy:
             fragments.extend(
                 [
@@ -486,6 +564,85 @@ class FinPilotChatApplication:
                 ]
             )
         return fragments
+
+    def _runtime_progress_fragments(self) -> StyleAndTextTuples:
+        now = time.perf_counter()
+        elapsed = max(0.0, now - self._thinking_started_at)
+        frame = THINKING_FRAMES[int(elapsed * 10) % len(THINKING_FRAMES)]
+        fragments: StyleAndTextTuples = [("", "\n")]
+        if self.runtime_state.plan:
+            for line in self._runtime_plan_lines():
+                fragments.append(("class:context.value", f"{line}\n"))
+        labels = (
+            [f"FinPilot is compressing context · 已用时 {now - self.context_state.status_started_at:.1f}s"]
+            if self.context_state.status == "compressing"
+            else self._active_runtime_labels(now)
+        )
+        for label in labels:
+            operation, separator, elapsed_text = label.partition(" · ")
+            fragments.extend(
+                [
+                    ("class:thinking.spinner", f"{frame} "),
+                    ("class:thinking.label", operation),
+                    ("class:thinking.elapsed", f"  {elapsed_text}" if separator else ""),
+                    ("", "\n"),
+                ]
+            )
+        return fragments
+
+    def _active_runtime_labels(self, now: float) -> list[str]:
+        state = self.runtime_state
+        if state.stage == "planner":
+            return [f"Planner is generating plan... · 已用时 {state.elapsed(now):.1f}s"]
+        if state.stage == "planner_failed":
+            return ["Planner failed to generate plan"]
+        if state.stage == "answer":
+            return [f"FinPilot is generating final answer... · 已用时 {state.elapsed(now):.1f}s"]
+        running = [node_id for node_id, status in state.node_statuses.items() if status == "RUNNING"]
+        if running:
+            return [
+                f"{state.node_details[node_id].get('agent_name', node_id)} is executing... · 已用时 "
+                f"{max(0.0, now - state.node_started_at.get(node_id, now)):.1f}s"
+                for node_id in running
+            ]
+        if state.stage == "execute":
+            return [f"FinPilot is scheduling DAG tasks... · 已用时 {state.elapsed(now):.1f}s"]
+        return []
+
+    def _runtime_plan_lines(self) -> list[str]:
+        lines = ["Execution Plan", "Node | Agent | Task | Depends On | Status | Duration"]
+        for node in self.runtime_state.plan.get("nodes", []):
+            node_id = str(node["node_id"])
+            status = self.runtime_state.node_statuses.get(node_id, "PENDING")
+            if status == "RUNNING" and node_id in self.runtime_state.node_started_at:
+                duration = time.perf_counter() - self.runtime_state.node_started_at[node_id]
+                duration_text = f"{duration:.1f}s"
+            elif node_id in self.runtime_state.node_elapsed:
+                duration_text = f"{self.runtime_state.node_elapsed[node_id]:.1f}s"
+            else:
+                duration_text = "—"
+            lines.append(
+                " | ".join(
+                    [
+                        node_id,
+                        str(node.get("agent_name", "")),
+                        str(node.get("task", "")),
+                        ", ".join(node.get("depends_on", [])) or "—",
+                        status,
+                        duration_text,
+                    ]
+                )
+            )
+        return lines
+
+    def _persist_runtime_summary(self) -> None:
+        if self._runtime_summary_persisted or not self.runtime_state.plan:
+            return
+        lines = self._runtime_plan_lines()[1:]
+        if self.runtime_state.planner_elapsed is not None:
+            lines.append(f"Planner generated plan · {self.runtime_state.planner_elapsed:.1f}s")
+        self._append_panel("Execution Plan", "\n".join(lines), role="system")
+        self._runtime_summary_persisted = True
 
     def _output_cursor_position(self) -> Point:
         fragments = self._output_fragments()
