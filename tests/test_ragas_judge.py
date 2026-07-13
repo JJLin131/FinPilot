@@ -44,7 +44,7 @@ def test_ragas_judge_requests_faithfulness_correctness_and_relevance(monkeypatch
     metrics_module = ModuleType("ragas.metrics")
     metrics_module.faithfulness = object()
     metrics_module.answer_correctness = object()
-    metrics_module.answer_relevancy = object()
+    metrics_module.answer_relevancy = SimpleNamespace(strictness=3)
     monkeypatch.setitem(sys.modules, "datasets", datasets_module)
     monkeypatch.setitem(sys.modules, "ragas", ragas_module)
     monkeypatch.setitem(sys.modules, "ragas.metrics", metrics_module)
@@ -63,9 +63,24 @@ def test_ragas_judge_requests_faithfulness_correctness_and_relevance(monkeypatch
     judge_embeddings = object()
     scores = RagasJudge(llm=judge_llm, embeddings=judge_embeddings).score(case, observation)
 
-    assert requested_metrics == [
-        metrics_module.faithfulness,
-        metrics_module.answer_correctness,
-        metrics_module.answer_relevancy,
-    ]
+    assert requested_metrics[:2] == [metrics_module.faithfulness, metrics_module.answer_correctness]
+    assert requested_metrics[2] is not metrics_module.answer_relevancy
+    assert requested_metrics[2].strictness == 1
+    assert metrics_module.answer_relevancy.strictness == 3
     assert scores == {"faithfulness": 0.91, "answer_correctness": 0.88, "answer_relevance": 0.93}
+
+
+def test_ragas_embeddings_send_text_to_openai_compatible_endpoint(monkeypatch):
+    captured = {}
+
+    class OpenAIEmbeddings:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    langchain_openai = ModuleType("langchain_openai")
+    langchain_openai.OpenAIEmbeddings = OpenAIEmbeddings
+    monkeypatch.setitem(sys.modules, "langchain_openai", langchain_openai)
+
+    RagasJudge._build_embeddings()
+
+    assert captured["check_embedding_ctx_length"] is False

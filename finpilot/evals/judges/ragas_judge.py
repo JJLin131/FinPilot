@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+
 from finpilot.config import settings
 
 
@@ -30,9 +32,12 @@ class RagasJudge:
                 "ground_truth": [case.reference_answer],
             }
         )
+        # 当前 OpenAI 兼容服务只支持 n=1；RAGAS 的默认 strictness=3 会发送 n=3。
+        answer_relevancy_metric = copy.deepcopy(answer_relevancy)
+        answer_relevancy_metric.strictness = 1
         scores = evaluate(
             dataset,
-            metrics=[faithfulness, answer_correctness, answer_relevancy],
+            metrics=[faithfulness, answer_correctness, answer_relevancy_metric],
             llm=llm,
             embeddings=embeddings,
             show_progress=False,
@@ -75,6 +80,7 @@ class RagasJudge:
             api_key="ollama",
             base_url=RagasJudge._openai_base_url(settings.embedding_base_url),
             model=settings.embedding_model_name,
+            check_embedding_ctx_length=False,
         )
 
     @staticmethod
