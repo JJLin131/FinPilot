@@ -249,6 +249,8 @@ finpilot eval run --mode release
 
 评测数据位于 `evals/datasets`，包括 `rag_retrieval`、`rag_generation`、`query_rewrite_reranker`、`planning_orchestration`、`tool_calling`、`end_to_end_task`、`multi_turn_memory`、`safety_redteam`、`resilience_degradation`、`performance_cost`、`observability_audit`。发布阈值位于 `evals/release_gate.json`。
 
+每次 `finpilot eval run` 都会在 `evals/reports` 自动生成指标型 Markdown 报告；可用 `--report-dir` 指定其他目录。报告按 RAG、规划、工具调用等能力汇总召回率、MRR、计划可行率、工具误判率、参数错误率、性能成本等指标，并复用发布门禁阈值给出达标结论。Langfuse 继续用于 trace 下钻和版本趋势分析，Markdown 用于版本验收与归档。
+
 `controlled` case 使用可控测试替身，不要求启动外部服务；`live` case 会先检查 MySQL、Chroma、embedding、reranker、模型、Langfuse、OTel 等依赖。依赖未启动时结果为 `ENV_UNAVAILABLE`，不会伪装成 0 分或通过。RAG 检索指标包含 Recall@K、Precision@K、Hit@K、MRR 和 NDCG；这里的 MRR 是 Mean Reciprocal Rank，不是 MMR 算法。
 
 DeepSeek 的性能成本评测使用 provider 返回的 token usage。若 case 配置了成本上限，还需设置 `AI_INPUT_COST_PER_MILLION` 和 `AI_OUTPUT_COST_PER_MILLION`；本地 Ollama 成本按 0 计算。新审计结果写入 `schema_version=2`，旧版本评测审计会在 AuditStore 初始化时清理。

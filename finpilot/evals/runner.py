@@ -20,9 +20,8 @@ from finpilot.evals.models import (
     PerformanceCostCase,
 )
 from finpilot.evals.registry import DEFAULT_SUITE_REGISTRY, SuiteRegistry
-
-
 EnvironmentChecker = Callable[[tuple[str, ...]], list[str]]
+ScorePublisher = Callable[..., None]
 
 
 class EvalRunner:
@@ -38,6 +37,7 @@ class EvalRunner:
         environment_checker: EnvironmentChecker | None = None,
         run_id: str = "local",
         release_gate: ReleaseGate | None = None,
+        score_publisher: ScorePublisher | None = None,
     ):
         self.agent_service = agent_service
         self.audit_store = audit_store
@@ -47,6 +47,8 @@ class EvalRunner:
         self.controlled_backend = controlled_backend or ControlledBackend({})
         self.evaluators = evaluators or build_default_evaluators()
         self.environment_checker = environment_checker or RuntimeEnvironmentChecker()
+        self.run_id = run_id
+        self.score_publisher = score_publisher
         gate_path = self.root.parent / "release_gate.json"
         self.release_gate = release_gate or (
             ReleaseGate.from_path(gate_path)
@@ -83,6 +85,8 @@ class EvalRunner:
             environment=self._environment_summary(results),
         )
         self.audit_store.record_eval_run(suite_result)
+        if self.score_publisher is not None:
+            self.score_publisher(suite_result, run_id=self.run_id)
         return suite_result
 
     def _run_case(self, case: BaseEvalCase, requirements: tuple[str, ...]) -> EvalCaseResult:

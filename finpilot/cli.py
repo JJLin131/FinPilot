@@ -112,9 +112,11 @@ def eval_list() -> None:
 def eval_run(
     suite: str | None = typer.Argument(None, help="Suite name; omit to run all suites."),
     mode: str = typer.Option("smoke", "--mode", help="smoke, regression, or release."),
+    report_dir: Path = typer.Option(Path("evals/reports"), "--report-dir", help="Markdown report output directory."),
 ) -> None:
-    from finpilot.evals import EvalRunner
+    from finpilot.evals import EvalRunner, write_capability_report
     from finpilot.observability.audit import FileAuditStore
+    from finpilot.observability.langfuse_support import publish_eval_suite_scores
 
     service = None
     try:
@@ -123,9 +125,17 @@ def eval_run(
         except Exception:
             service = None
         audit_store = service.audit_store if service is not None else FileAuditStore(settings.audit_dir)
-        runner = EvalRunner(service, audit_store, run_id=str(uuid.uuid4()))
+        runner = EvalRunner(
+            service,
+            audit_store,
+            run_id=str(uuid.uuid4()),
+            score_publisher=publish_eval_suite_scores,
+        )
         result = runner.run_suite(suite, mode=mode) if suite else runner.run(mode=mode)
+        gate_config = getattr(getattr(runner, "release_gate", None), "config", {})
+        report_path = write_capability_report(result, output_dir=report_dir, gate_config=gate_config)
         typer.echo(result.model_dump_json(indent=2))
+        typer.echo(f"能力测评报告：{report_path}", err=True)
     finally:
         if service is not None:
             service.shutdown()

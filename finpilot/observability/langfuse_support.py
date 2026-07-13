@@ -87,6 +87,43 @@ def score_trace(trace_id: str, *, name: str, value: float | str, comment: str | 
         return
 
 
+def publish_eval_suite_scores(suite: Any, *, run_id: str) -> None:
+    """Publish aggregate evaluation metrics to one deterministic Langfuse run trace."""
+    client = get_langfuse_client()
+    if client is None:
+        return
+    try:
+        trace_id = client.create_trace_id(seed=f"finpilot-eval:{run_id}")
+        metadata = {
+            "schema_version": int(getattr(suite, "schema_version", 2)),
+            "suite": str(suite.suite),
+            "mode": str(suite.mode),
+            "status": str(getattr(suite.status, "value", suite.status)),
+            "total_cases": int(suite.total_cases),
+            "passed_cases": int(suite.passed_cases),
+        }
+        with client.start_as_current_span(
+            trace_context={"trace_id": trace_id},
+            name=f"eval.{suite.suite}",
+            input={"suite": suite.suite, "mode": suite.mode},
+            output={"status": metadata["status"], "metrics": dict(suite.metrics)},
+            metadata=metadata,
+        ):
+            pass_rate = suite.passed_cases / suite.total_cases if suite.total_cases else 0.0
+            scores = {"pass_rate": pass_rate, **dict(suite.metrics)}
+            for metric_name, value in scores.items():
+                if not isinstance(value, (int, float)) or isinstance(value, bool):
+                    continue
+                client.create_score(
+                    trace_id=trace_id,
+                    name=f"eval.{suite.suite}.{metric_name}",
+                    value=float(value),
+                    metadata=metadata,
+                )
+    except Exception as exc:
+        logger.warning("Failed to publish evaluation scores to Langfuse: %s", exc)
+
+
 def sync_local_datasets(root: Path) -> None:
     client = get_langfuse_client()
     if client is None or not root.exists():

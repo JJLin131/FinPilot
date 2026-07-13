@@ -18,5 +18,7 @@ class ToolCallingEvaluator:
             "forbidden_tool_count": float(len(set(actual_names) & set(case.forbidden_tools))),
             "final_state_match": float(contains_mapping(observation.final_state, case.expected_final_state)),
         }
+        metrics["tool_misjudgment_rate"] = 1.0 - metrics["tool_sequence_accuracy"]
+        metrics["parameter_error_rate"] = 1.0 - metrics["argument_exact_match"]
         passed = metrics["tool_sequence_accuracy"] == 1.0 and metrics["argument_exact_match"] == 1.0 and metrics["forbidden_tool_count"] == 0 and metrics["final_state_match"] == 1.0
         return result(case, observation, metrics, passed)

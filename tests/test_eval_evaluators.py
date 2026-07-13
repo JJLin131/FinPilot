@@ -133,7 +133,9 @@ def test_tool_evaluator_requires_exact_order_arguments_and_no_forbidden_calls():
 
     assert result.passed is True
     assert result.metrics["tool_sequence_accuracy"] == 1.0
+    assert result.metrics["tool_misjudgment_rate"] == 0.0
     assert result.metrics["argument_exact_match"] == 1.0
+    assert result.metrics["parameter_error_rate"] == 0.0
 
 
 def test_default_evaluator_registry_covers_every_executable_suite():

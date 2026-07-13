@@ -26,7 +26,7 @@ def test_eval_list_prints_only_new_suite_names():
     assert "routing" not in result.stdout.splitlines()
 
 
-def test_eval_run_forwards_suite_and_mode_and_shuts_down(monkeypatch):
+def test_eval_run_forwards_suite_and_mode_and_writes_report(monkeypatch, tmp_path):
     captured = {}
 
     class Service:
@@ -44,8 +44,15 @@ def test_eval_run_forwards_suite_and_mode_and_shuts_down(monkeypatch):
             return '{"status":"PASSED"}'
 
     class Runner:
-        def __init__(self, agent_service, audit_store, run_id):
-            captured.update(service=agent_service, audit_store=audit_store, run_id=run_id)
+        release_gate = type("Gate", (), {"config": {"metric_thresholds": {}}})()
+
+        def __init__(self, agent_service, audit_store, run_id, score_publisher):
+            captured.update(
+                service=agent_service,
+                audit_store=audit_store,
+                run_id=run_id,
+                score_publisher=score_publisher,
+            )
 
         def run_suite(self, suite, *, mode):
             captured.update(suite=suite, mode=mode)
@@ -54,11 +61,24 @@ def test_eval_run_forwards_suite_and_mode_and_shuts_down(monkeypatch):
     monkeypatch.setattr(cli, "service_factory", lambda: service)
     monkeypatch.setattr("finpilot.evals.EvalRunner", Runner)
 
-    result = runner.invoke(cli.app, ["eval", "run", "rag_retrieval", "--mode", "release"])
+    def write_report(result, *, output_dir, gate_config):
+        captured.update(report_result=result, report_dir=output_dir, gate_config=gate_config)
+        return output_dir / "report.md"
+
+    monkeypatch.setattr("finpilot.evals.write_capability_report", write_report)
+
+    result = runner.invoke(
+        cli.app,
+        ["eval", "run", "rag_retrieval", "--mode", "release", "--report-dir", str(tmp_path)],
+    )
 
     assert result.exit_code == 0
     assert captured["suite"] == "rag_retrieval"
     assert captured["mode"] == "release"
+    assert callable(captured["score_publisher"])
+    assert captured["report_dir"] == tmp_path
+    assert captured["gate_config"] == {"metric_thresholds": {}}
+    assert "report.md" in result.output
     assert service.shutdown_called is True
 
 
