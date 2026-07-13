@@ -7,7 +7,8 @@ from finpilot.agent.tools import ToolRegistry
 from finpilot.agent.graph import FinPilotGraph
 from finpilot.config import settings
 from finpilot.llm import FinanceAnsweringService
-from finpilot.models import AgentIssue, EvalSuiteResult, GraphState, RagMatch, RouteDecision, ToolInvocation
+from finpilot.evals.models import EvalSuiteResult
+from finpilot.models import AgentIssue, GraphState, RagMatch, RouteDecision, ToolInvocation
 from finpilot.observability.audit import AuditStore
 
 

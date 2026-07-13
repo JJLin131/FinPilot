@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     ai_model_name: str = "deepseek-v4-pro"
     ai_timeout_seconds: int = 120
     ai_debug_trace: bool = False
+    ai_input_cost_per_million: float | None = None
+    ai_output_cost_per_million: float | None = None
 
     safety_response_llm_enabled: bool = False
     safety_response_provider: str = "deepseek"

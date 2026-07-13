@@ -7,8 +7,10 @@ from pathlib import Path
 from typing import Any
 
 from finpilot.config import settings
-from finpilot.models import AgentIssue, EvalSuiteResult, GraphState, ToolInvocation
+from finpilot.evals.models import EvalSuiteResult
+from finpilot.models import AgentIssue, GraphState, ToolInvocation
 from finpilot.mysql import connect_runtime_mysql
+from finpilot.observability.capture import record_audit_event
 from finpilot.safety.models import SafetyFinding
 from finpilot.safety.redaction import redact_value
 
@@ -37,6 +39,21 @@ class FileAuditStore(AuditStore):
     def __init__(self, root: Path):
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
+        self._purge_legacy_eval_runs()
+
+    def _purge_legacy_eval_runs(self) -> None:
+        path = self.root / "agent_eval_run.jsonl"
+        if not path.exists():
+            return
+        retained: list[str] = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if payload.get("schema_version") == 2:
+                retained.append(json.dumps(payload, ensure_ascii=False))
+        path.write_text(("\n".join(retained) + "\n") if retained else "", encoding="utf-8")
 
     def record_tool(self, state: GraphState, invocation: ToolInvocation) -> None:
         self._append(
@@ -52,6 +69,7 @@ class FileAuditStore(AuditStore):
                 "duration_ms": invocation.duration_ms,
             },
         )
+        record_audit_event("tool_call", {"tool_name": invocation.tool_name, "status": invocation.status})
 
     def record_unknown_intent(self, state: GraphState, decision: Any) -> None:
         self._append(
@@ -96,6 +114,7 @@ class FileAuditStore(AuditStore):
 
     def record_eval_run(self, result: EvalSuiteResult) -> None:
         self._append("agent_eval_run.jsonl", result.model_dump())
+        record_audit_event("eval_run", {"suite": result.suite, "status": result.status.value})
 
     def record_safety_finding(self, state: GraphState, finding: SafetyFinding) -> None:
         self._append(
@@ -196,6 +215,7 @@ class MySqlAuditStore(AuditStore):
                     """
                     create table if not exists agent_eval_run (
                         id bigint not null auto_increment primary key,
+                        schema_version int not null default 2,
                         suite_name varchar(128) not null,
                         total_cases int not null,
                         passed_cases int not null,
@@ -206,6 +226,20 @@ class MySqlAuditStore(AuditStore):
                     )
                     """
                 )
+                cursor.execute(
+                    """
+                    select count(*) from information_schema.columns
+                    where table_schema = database()
+                      and table_name = 'agent_eval_run'
+                      and column_name = 'schema_version'
+                    """
+                )
+                row = cursor.fetchone()
+                if not row or int(row[0]) == 0:
+                    cursor.execute(
+                        "alter table agent_eval_run add column schema_version int not null default 1 after id"
+                    )
+                cursor.execute("delete from agent_eval_run where schema_version <> 2")
                 cursor.execute(
                     """
                     create table if not exists agent_issue_audit (
@@ -307,6 +341,7 @@ class MySqlAuditStore(AuditStore):
                         invocation.duration_ms,
                     ),
                 )
+        record_audit_event("tool_call", {"tool_name": invocation.tool_name, "status": invocation.status})
 
     def record_unknown_intent(self, state: GraphState, decision: Any) -> None:
         with self._connect() as connection:
@@ -370,19 +405,21 @@ class MySqlAuditStore(AuditStore):
                     cursor.execute(
                         """
                         insert into agent_eval_run
-                        (suite_name, total_cases, passed_cases, score, details_json, created_at)
-                        values (%s, %s, %s, %s, %s, current_timestamp(6))
+                        (schema_version, suite_name, total_cases, passed_cases, score, details_json, created_at)
+                        values (%s, %s, %s, %s, %s, %s, current_timestamp(6))
                         """,
                         (
+                            result.schema_version,
                             result.suite,
                             result.total_cases,
                             result.passed_cases,
-                            result.score,
-                            json.dumps(result.details, ensure_ascii=False),
+                            result.passed_cases / result.total_cases if result.total_cases else 0.0,
+                            json.dumps(result.model_dump(mode="json"), ensure_ascii=False),
                         ),
                     )
                 except Exception:
                     return
+        record_audit_event("eval_run", {"suite": result.suite, "status": result.status.value})
 
     def record_safety_finding(self, state: GraphState, finding: SafetyFinding) -> None:
         with self._connect() as connection:

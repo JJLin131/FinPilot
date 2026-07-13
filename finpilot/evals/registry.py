@@ -37,17 +37,17 @@ class SuiteRegistry:
 
 
 _REQUIREMENTS = {
-    "rag_retrieval": ("bm25", "chroma", "embedding"),
-    "rag_generation": ("llm",),
-    "query_rewrite_mmr_reranker": ("query_rewriter", "reranker"),
-    "planning_orchestration": ("planner",),
-    "tool_calling": ("agent",),
-    "end_to_end_task": ("agent", "mysql"),
-    "multi_turn_memory": ("mysql", "chroma"),
-    "safety_redteam": ("agent",),
+    "rag_retrieval": ("runtime_service", "bm25", "chroma", "embedding", "reranker"),
+    "rag_generation": ("runtime_service", "llm", "embedding", "ragas"),
+    "query_rewrite_reranker": ("runtime_service", "bm25", "chroma", "embedding", "query_rewriter", "reranker"),
+    "planning_orchestration": ("runtime_service", "planner"),
+    "tool_calling": ("runtime_service", "agent"),
+    "end_to_end_task": ("runtime_service", "agent", "mysql"),
+    "multi_turn_memory": ("runtime_service", "mysql", "chroma"),
+    "safety_redteam": ("runtime_service", "agent"),
     "resilience_degradation": ("controlled_backend",),
-    "performance_cost": ("agent",),
-    "observability_audit": ("langfuse", "otel", "audit"),
+    "performance_cost": ("runtime_service", "agent", "cost_pricing"),
+    "observability_audit": ("runtime_service", "langfuse", "otel", "audit"),
 }
 
 

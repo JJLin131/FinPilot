@@ -358,6 +358,13 @@ class MemoryManager:
             self._executor.shutdown(wait=wait, cancel_futures=cancel_futures)
             self._executor = None
 
+    def wait_for_pending(self) -> None:
+        """等待当前记忆提取任务完成，供一致性要求较高的评测和维护流程使用。"""
+        with self._tail_lock:
+            tails = list(self._user_tails.values())
+        if tails:
+            wait_for_futures(tails)
+
     def _chat_id_from_memory_id(self, memory_id: str) -> str:
         return memory_id.rsplit(":", 1)[-1] if ":" in memory_id else memory_id
 

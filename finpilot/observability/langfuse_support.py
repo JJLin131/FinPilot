@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from finpilot.config import settings
+from finpilot.observability.capture import record_score
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,7 @@ def upsert_dataset_item(
 
 
 def score_trace(trace_id: str, *, name: str, value: float | str, comment: str | None = None, metadata: dict[str, Any] | None = None) -> None:
+    record_score(name, value, metadata)
     client = get_langfuse_client()
     if client is None:
         return
@@ -102,33 +104,30 @@ def sync_local_datasets(root: Path) -> None:
                 if not line:
                     continue
                 payload = json.loads(line)
+                input_fields = {
+                    key: payload[key]
+                    for key in ("query", "question", "user_message", "turns", "prompt")
+                    if key in payload
+                }
+                common_fields = {
+                    "suite", "case_id", "name", "description", "tags", "execution_mode",
+                    "severity", "timeout_seconds", "repetitions", "fixtures",
+                }
                 upsert_dataset_item(
                     dataset_name,
                     case_name=payload["name"],
-                    payload_input={
-                        "user_id": payload.get("user_id", "eval-user"),
-                        "chat_id": payload["chat_id"],
-                        "content": payload["content"],
-                    },
+                    payload_input={"case_id": payload["case_id"], **input_fields},
                     expected_output={
-                        "expected_planning_status": payload.get("expected_planning_status"),
-                        "expected_agents": payload.get("expected_agents", []),
-                        "expected_status": payload.get("expected_status"),
-                        "expected_tool": payload.get("expected_tool"),
-                        "expected_tool_status": payload.get("expected_tool_status"),
-                        "expected_tool_args": payload.get("expected_tool_args", {}),
-                        "expected_answer_contains": payload.get("expected_answer_contains"),
-                        "relevant_document_ids": payload.get("relevant_document_ids", []),
-                        "expected_evidence_tool": payload.get("expected_evidence_tool"),
-                        "expected_reranked_document_ids": payload.get("expected_reranked_document_ids", []),
-                        "threat": payload.get("threat"),
-                        "expected_safety_action": payload.get("expected_safety_action"),
-                        "expected_safety_code": payload.get("expected_safety_code"),
-                        "requires_approval": payload.get("requires_approval", False),
-                        "privacy_forbidden_fields": payload.get("privacy_forbidden_fields", []),
-                        "metric_tags": payload.get("metric_tags", []),
+                        key: value
+                        for key, value in payload.items()
+                        if key not in common_fields and key not in input_fields
                     },
-                    metadata={"suite": payload["suite"]},
+                    metadata={
+                        "schema_version": 2,
+                        "suite": payload["suite"],
+                        "execution_mode": payload.get("execution_mode", "controlled"),
+                        "severity": payload.get("severity", "medium"),
+                    },
                 )
 
 

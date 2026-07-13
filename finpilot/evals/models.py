@@ -65,8 +65,8 @@ class RagGenerationCase(BaseEvalCase):
     expected_citations: list[str] = Field(default_factory=list)
 
 
-class QueryRewriteMmrRerankerCase(BaseEvalCase):
-    suite: Literal["query_rewrite_mmr_reranker"]
+class QueryRewriteRerankerCase(BaseEvalCase):
+    suite: Literal["query_rewrite_reranker"]
     query: str = Field(min_length=1)
     reference_rewrite: str = Field(min_length=1)
     relevant_document_ids: list[str] = Field(default_factory=list)
@@ -175,7 +175,7 @@ class ObservabilityAuditCase(BaseEvalCase):
 CASE_MODELS: dict[str, type[BaseEvalCase]] = {
     "rag_retrieval": RagRetrievalCase,
     "rag_generation": RagGenerationCase,
-    "query_rewrite_mmr_reranker": QueryRewriteMmrRerankerCase,
+    "query_rewrite_reranker": QueryRewriteRerankerCase,
     "planning_orchestration": PlanningOrchestrationCase,
     "tool_calling": ToolCallingCase,
     "end_to_end_task": EndToEndTaskCase,
@@ -201,9 +201,33 @@ class EvalFailure(StrictEvalModel):
     detail: dict[str, Any] = Field(default_factory=dict)
 
 
+class EvalObservation(StrictEvalModel):
+    status: str
+    response: dict[str, Any] = Field(default_factory=dict)
+    retrieved_documents: list[dict[str, Any]] = Field(default_factory=list)
+    rewritten_query: str | None = None
+    ranked_documents: list[dict[str, Any]] = Field(default_factory=list)
+    plan: dict[str, Any] = Field(default_factory=dict)
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    initial_state: dict[str, Any] = Field(default_factory=dict)
+    final_state: dict[str, Any] = Field(default_factory=dict)
+    traces: list[dict[str, Any]] = Field(default_factory=list)
+    scores: list[dict[str, Any]] = Field(default_factory=list)
+    audit_events: list[dict[str, Any]] = Field(default_factory=list)
+    errors: list[EvalFailure] = Field(default_factory=list)
+    side_effect_count: int = Field(default=0, ge=0)
+    attempts: int = Field(default=1, ge=0)
+    duration_ms: float = Field(default=0.0, ge=0)
+    duration_samples_ms: list[float] = Field(default_factory=list)
+    token_usage: dict[str, int] = Field(default_factory=dict)
+    cost: float = Field(default=0.0, ge=0)
+
+
 class EvalCaseResult(StrictEvalModel):
+    schema_version: Literal[2] = 2
     suite: str
     case_id: str
+    severity: Literal["critical", "high", "medium", "low"] = "medium"
     status: EvalStatus
     passed: bool
     metrics: dict[str, Any] = Field(default_factory=dict)
@@ -214,6 +238,7 @@ class EvalCaseResult(StrictEvalModel):
 
 
 class EvalSuiteResult(StrictEvalModel):
+    schema_version: Literal[2] = 2
     suite: str
     mode: Literal["smoke", "regression", "release"]
     status: EvalStatus
@@ -226,6 +251,7 @@ class EvalSuiteResult(StrictEvalModel):
 
 
 class EvalRunResult(StrictEvalModel):
+    schema_version: Literal[2] = 2
     mode: Literal["smoke", "regression", "release"]
     status: EvalStatus
     suites: list[EvalSuiteResult] = Field(default_factory=list)

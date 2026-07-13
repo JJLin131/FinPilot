@@ -15,12 +15,12 @@ from finpilot.models import (
     AgentChatResponse,
     AgentEvidence,
     AgentIssue,
-    EvalSuiteResult,
     GraphState,
     RouteDecision,
     SubAgentContext,
     SubAgentResult,
 )
+from finpilot.evals.models import EvalSuiteResult
 from finpilot.observability.audit import AuditStore
 from finpilot.responses import prepare_chat_response
 

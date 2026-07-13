@@ -93,9 +93,42 @@ app = typer.Typer(
 knowledge_app = typer.Typer(help="Manage shared FinPilot knowledge resources.", rich_markup_mode=None)
 tools_app = typer.Typer(help="Manage FinPilot agent tools.", rich_markup_mode=None)
 chroma_app = typer.Typer(help="Manage FinPilot Chroma collections.", rich_markup_mode=None)
+eval_app = typer.Typer(help="Run FinPilot evaluation suites.", rich_markup_mode=None)
 app.add_typer(knowledge_app, name="knowledge")
 app.add_typer(tools_app, name="tools")
 app.add_typer(chroma_app, name="chroma")
+app.add_typer(eval_app, name="eval")
+
+
+@eval_app.command("list")
+def eval_list() -> None:
+    from finpilot.evals.registry import DEFAULT_SUITE_REGISTRY
+
+    for suite in DEFAULT_SUITE_REGISTRY.names():
+        typer.echo(suite)
+
+
+@eval_app.command("run")
+def eval_run(
+    suite: str | None = typer.Argument(None, help="Suite name; omit to run all suites."),
+    mode: str = typer.Option("smoke", "--mode", help="smoke, regression, or release."),
+) -> None:
+    from finpilot.evals import EvalRunner
+    from finpilot.observability.audit import FileAuditStore
+
+    service = None
+    try:
+        try:
+            service = service_factory()
+        except Exception:
+            service = None
+        audit_store = service.audit_store if service is not None else FileAuditStore(settings.audit_dir)
+        runner = EvalRunner(service, audit_store, run_id=str(uuid.uuid4()))
+        result = runner.run_suite(suite, mode=mode) if suite else runner.run(mode=mode)
+        typer.echo(result.model_dump_json(indent=2))
+    finally:
+        if service is not None:
+            service.shutdown()
 
 
 def _default_service_factory(

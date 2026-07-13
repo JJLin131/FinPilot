@@ -38,7 +38,7 @@ FinPilot 是一个面向企业财资管理场景的智能系统原型。它通�
 | 财资操作办理 | 可用，模拟执行 | `TreasuryOperationAgent` 暴露付款、转账、单据下载等操作工具，并进入安全审查与审批链路。 |
 | 安全审查 | 可用 | 输入、工具参数、工具结果、最终回答均可产生结构化 finding、issue 和审计记录。 |
 | 可观测性 | 可用 | 支持健康检查、readyz、审计表、OpenTelemetry、Langfuse 可选集成。 |
-| 评测闭环 | 可用，轻量 | JSONL smoke 覆盖 routing、tool use、RAG retrieval、grounded answer、safety。 |
+| 评测闭环 | 可用 | 11 个严格 JSONL suite 覆盖 RAG、改写重排、规划、工具、端到端、记忆、安全、韧性、性能成本与可观测性，并提供发布门禁。 |
 
 ## 系统架构
 
@@ -232,13 +232,26 @@ docker compose --profile ai-lab up --build
 .\.venv\Scripts\python.exe -m ruff check .
 ```
 
-评测 smoke：
+安装真实生成质量评测依赖：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_eval_datasets.py -q
+.\.venv\Scripts\python.exe -m pip install -e ".[eval]"
 ```
 
-评测数据位于 `evals/datasets`，覆盖 routing、tool use、RAG retrieval、grounded answer、safety。Safety case 使用 `expected_safety_action` 和 `expected_safety_code` 表达预期行为；`threat` 只是攻击类型元数据。Langfuse 是可选观测与评测记录后端，本地 smoke 不依赖真实外部服务。
+运行评测：
+
+```powershell
+finpilot eval list
+finpilot eval run --mode smoke
+finpilot eval run rag_retrieval --mode regression
+finpilot eval run --mode release
+```
+
+评测数据位于 `evals/datasets`，包括 `rag_retrieval`、`rag_generation`、`query_rewrite_reranker`、`planning_orchestration`、`tool_calling`、`end_to_end_task`、`multi_turn_memory`、`safety_redteam`、`resilience_degradation`、`performance_cost`、`observability_audit`。发布阈值位于 `evals/release_gate.json`。
+
+`controlled` case 使用可控测试替身，不要求启动外部服务；`live` case 会先检查 MySQL、Chroma、embedding、reranker、模型、Langfuse、OTel 等依赖。依赖未启动时结果为 `ENV_UNAVAILABLE`，不会伪装成 0 分或通过。RAG 检索指标包含 Recall@K、Precision@K、Hit@K、MRR 和 NDCG；这里的 MRR 是 Mean Reciprocal Rank，不是 MMR 算法。
+
+DeepSeek 的性能成本评测使用 provider 返回的 token usage。若 case 配置了成本上限，还需设置 `AI_INPUT_COST_PER_MILLION` 和 `AI_OUTPUT_COST_PER_MILLION`；本地 Ollama 成本按 0 计算。新审计结果写入 `schema_version=2`，旧版本评测审计会在 AuditStore 初始化时清理。
 
 ## 安全治理
 
@@ -275,7 +288,8 @@ web/                  # product showcase frontend and shared visual assets
 | Chroma / embedding degraded | 启动 AI lab profile，或设置 `VECTOR_ENABLED=false` 使用 BM25-only 本地模式。 |
 | reranker degraded | 启动 reranker 服务，或设置 `RERANKER_ENABLED=false`。 |
 | 请求被安全审查阻断 | 查看 `issues`、`safety_findings` 和审计记录；只在可信诊断环境使用 `X-Debug-Trace: true`。 |
-| eval 失败 | 先运行 `tests/test_eval_datasets.py` 检查 JSONL schema，再检查 intent、tool、safety、document id 预期。 |
+| eval 返回 `ENV_UNAVAILABLE` | 查看 failure 中的缺失能力；启动对应外部服务，或只运行使用可控替身的 case。 |
+| eval 返回 `FIXTURE_UNAVAILABLE` | 检查 controlled case 的 `fixtures.observation` 或已注册的命名 fixture。 |
 
 ## 记忆加密与 Chroma
 
@@ -308,7 +322,7 @@ chroma browse finance-knowledge-bge-m3-v2 --host http://localhost:8000
 - 增加登录、鉴权、用户权限和管理员能力边界。
 - 将模拟操作工具替换为受控 HTTP 后端适配器。
 - 扩展企业级业务规则校验与流程编排。
-- 将 smoke eval 提升为发布门禁，并在数据集稳定后再引入更完整的 prompt/eval 工具链。
+- 持续扩充真实业务样本、对抗样本和历史回归样本，并根据生产基线校准发布阈值。
 
 ## 非目标
 

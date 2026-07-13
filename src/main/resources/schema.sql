@@ -114,6 +114,7 @@ create table if not exists knowledge_chunk_content (
 
 create table if not exists agent_eval_run (
     id bigint not null auto_increment primary key,
+    schema_version int not null default 2,
     suite_name varchar(128) not null,
     total_cases int not null,
     passed_cases int not null,

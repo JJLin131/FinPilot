@@ -5,10 +5,11 @@ import json
 import uuid
 
 from finpilot.agent.service import FinPilotService
-from finpilot.models import FinPilotChatRequest
+from finpilot.models import FinPilotChatRequest, RagMatch
 from finpilot.rag.bm25 import Bm25ChunkIndex
 from finpilot.rag.importer import ResourceKnowledgeImporter
 from finpilot.rag.models import KnowledgeDocumentRequest
+from finpilot.rag.service import RagKnowledgeService
 
 
 def test_chat_request_has_no_tenant_id():
@@ -79,3 +80,42 @@ def test_resource_importer_uses_stable_uuid_document_ids():
     expected = f"resource-finance-{uuid.uuid5(uuid.NAMESPACE_URL, '01_demo.md')}"
 
     assert ResourceKnowledgeImporter._resource_document_id("01_demo.md") == expected
+
+
+def test_rag_search_trace_exposes_rewrites_candidates_and_reranked_results():
+    match = RagMatch(document_id="doc-1", title="工资", source="manual", text="工资需要审批", score=0.8)
+
+    class Rewriter:
+        def rewrite(self, query):
+            assert query == "工资咋发"
+            return ["企业工资发放规则"]
+
+    class Retriever:
+        def retrieve(self, domain, query, limit):
+            assert (domain, query, limit) == ("FINANCE", "企业工资发放规则", 12)
+            return [match]
+
+    class Registry:
+        def is_active(self, document_id, domain, today):
+            del today
+            return (document_id, domain) == ("doc-1", "FINANCE")
+
+    class Reranker:
+        def rerank(self, query, candidates, limit):
+            assert query == "工资咋发"
+            assert candidates == [match]
+            assert limit == 3
+            return candidates
+
+    service = object.__new__(RagKnowledgeService)
+    service.query_rewriter = Rewriter()
+    service.retriever = Retriever()
+    service.registry = Registry()
+    service.reranker = Reranker()
+
+    trace = service.search_trace("工资咋发", limit=3)
+
+    assert trace["rewritten_queries"] == ["企业工资发放规则"]
+    assert trace["candidates"] == [match]
+    assert trace["reranked"] == [match]
+    assert trace["issues"] == []

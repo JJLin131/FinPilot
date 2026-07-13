@@ -93,9 +93,15 @@ class RagKnowledgeService:
 
     def search_with_issues(self, query: str, limit: int = 5) -> tuple[list[RagMatch], list[AgentIssue]]:
         """返回本次检索的诊断信息，避免并发请求竞争实例级 issue 缓存。"""
+        trace = self.search_trace(query, limit=limit)
+        return trace["reranked"], trace["issues"]
+
+    def search_trace(self, query: str, limit: int = 5) -> dict[str, list]:
+        """返回改写、候选集和重排结果，供离线评测精确计算检索指标。"""
         issues: list[AgentIssue] = []
         candidates: dict[str, RagMatch] = {}
-        for rewritten in self.query_rewriter.rewrite(query):
+        rewritten_queries = list(self.query_rewriter.rewrite(query))
+        for rewritten in rewritten_queries:
             retrieved = self.retriever.retrieve("FINANCE", rewritten, max(limit * 4, 12))
             issues.extend(self._consume_component_issues(self.retriever))
             for match in retrieved:
@@ -105,9 +111,15 @@ class RagKnowledgeService:
                 current = candidates.get(key)
                 if current is None or match.score > current.score:
                     candidates[key] = match
-        reranked = self.reranker.rerank(query, list(candidates.values()), limit)
+        candidate_matches = list(candidates.values())
+        reranked = self.reranker.rerank(query, candidate_matches, limit)
         issues.extend(self._consume_component_issues(self.reranker))
-        return reranked, issues
+        return {
+            "rewritten_queries": rewritten_queries,
+            "candidates": candidate_matches,
+            "reranked": reranked,
+            "issues": issues,
+        }
 
     def consume_issues(self) -> list[AgentIssue]:
         issues = list(self._issues)

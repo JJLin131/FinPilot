@@ -9,6 +9,7 @@ import httpx
 from finpilot.config import settings
 from finpilot.issues import dependency_degraded_issue
 from finpilot.models import AgentIssue
+from finpilot.usage import record_usage
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,16 @@ class DeepSeekChatClient:
             )
             response.raise_for_status()
             payload = response.json()
+            usage = payload.get("usage") or {}
+            prompt_tokens = int(usage.get("prompt_tokens") or 0)
+            completion_tokens = int(usage.get("completion_tokens") or 0)
+            input_rate = settings.ai_input_cost_per_million or 0.0
+            output_rate = settings.ai_output_cost_per_million or 0.0
+            record_usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                cost=(prompt_tokens * input_rate + completion_tokens * output_rate) / 1_000_000,
+            )
             choices = payload.get("choices", [])
             if not choices:
                 raise ValueError("DeepSeek returned no choices.")
@@ -79,6 +90,11 @@ class OllamaClient:
             )
             response.raise_for_status()
             payload = response.json()
+            record_usage(
+                prompt_tokens=int(payload.get("prompt_eval_count") or 0),
+                completion_tokens=int(payload.get("eval_count") or 0),
+                cost=0.0,
+            )
             text = payload.get("response")
             if not isinstance(text, str) or not text.strip():
                 raise ValueError("Ollama returned an empty response.")

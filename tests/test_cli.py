@@ -17,6 +17,51 @@ from finpilot.safety.models import SafetyFinding
 runner = CliRunner()
 
 
+def test_eval_list_prints_only_new_suite_names():
+    result = runner.invoke(cli.app, ["eval", "list"])
+
+    assert result.exit_code == 0
+    assert "rag_retrieval" in result.stdout
+    assert "query_rewrite_reranker" in result.stdout
+    assert "routing" not in result.stdout.splitlines()
+
+
+def test_eval_run_forwards_suite_and_mode_and_shuts_down(monkeypatch):
+    captured = {}
+
+    class Service:
+        audit_store = object()
+        shutdown_called = False
+
+        def shutdown(self):
+            self.shutdown_called = True
+
+    service = Service()
+
+    class Result:
+        def model_dump_json(self, indent=2):
+            del indent
+            return '{"status":"PASSED"}'
+
+    class Runner:
+        def __init__(self, agent_service, audit_store, run_id):
+            captured.update(service=agent_service, audit_store=audit_store, run_id=run_id)
+
+        def run_suite(self, suite, *, mode):
+            captured.update(suite=suite, mode=mode)
+            return Result()
+
+    monkeypatch.setattr(cli, "service_factory", lambda: service)
+    monkeypatch.setattr("finpilot.evals.EvalRunner", Runner)
+
+    result = runner.invoke(cli.app, ["eval", "run", "rag_retrieval", "--mode", "release"])
+
+    assert result.exit_code == 0
+    assert captured["suite"] == "rag_retrieval"
+    assert captured["mode"] == "release"
+    assert service.shutdown_called is True
+
+
 def test_default_service_factory_accepts_lifecycle_callbacks(monkeypatch):
     captured: dict[str, object] = {}
 

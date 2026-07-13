@@ -42,10 +42,14 @@ def create_app() -> FastAPI:
         debug_enabled = (x_debug_trace or "").lower() == "true"
         return prepare_chat_response(response, debug_enabled=debug_enabled)
 
+    @app.post("/internal/evals/run")
+    def run_all_evals(mode: str = "smoke"):
+        return eval_runner.run(mode=mode)
+
     @app.post("/internal/evals/run/{suite}")
-    def run_eval_suite(suite: str):
+    def run_eval_suite(suite: str, mode: str = "smoke"):
         try:
-            return eval_runner.run_suite(suite)
+            return eval_runner.run_suite(suite, mode=mode)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 

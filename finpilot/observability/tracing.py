@@ -11,6 +11,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from finpilot.config import settings
+from finpilot.observability.capture import record_span
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +48,14 @@ def tracer():
 @contextmanager
 def span(name: str, attributes: dict[str, Any] | None = None):
     trace_attributes = attributes or {}
-    with tracer().start_as_current_span(name) as current_span:
-        for key, value in trace_attributes.items():
-            if value is not None:
-                current_span.set_attribute(key, value)
-        yield current_span
+    try:
+        with tracer().start_as_current_span(name) as current_span:
+            for key, value in trace_attributes.items():
+                if value is not None:
+                    current_span.set_attribute(key, value)
+            yield current_span
+    finally:
+        record_span(name, trace_attributes)
 
 
 def current_trace_id() -> str:

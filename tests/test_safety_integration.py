@@ -11,7 +11,8 @@ from finpilot.agent.tools import ToolRegistry
 from finpilot.config import settings
 from finpilot.context.compression import ContextLifecycleEvent
 from finpilot.memory.models import MemoryContext
-from finpilot.models import AgentIssue, EvalSuiteResult, GraphState, RouteDecision, SubAgentContext, SubAgentResult, ToolInvocation
+from finpilot.evals.models import EvalSuiteResult
+from finpilot.models import AgentIssue, GraphState, RouteDecision, SubAgentContext, SubAgentResult, ToolInvocation
 from finpilot.observability.audit import AuditStore
 from finpilot.safety.approval import ApprovalDecision, ApprovalService
 from finpilot.safety.models import SafetyFinding, SafetyReviewResult

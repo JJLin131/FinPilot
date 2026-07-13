@@ -13,7 +13,7 @@ from finpilot.evals.models import (
     ObservabilityAuditCase,
     PerformanceCostCase,
     PlanningOrchestrationCase,
-    QueryRewriteMmrRerankerCase,
+    QueryRewriteRerankerCase,
     RagGenerationCase,
     RagRetrievalCase,
     ResilienceDegradationCase,
@@ -146,7 +146,7 @@ def test_eval_results_preserve_structured_failure_statuses():
         ),
         (
             {
-                "suite": "query_rewrite_mmr_reranker",
+                "suite": "query_rewrite_reranker",
                 "case_id": "rewrite-001",
                 "name": "工资短问改写",
                 "query": "工资规则？",
@@ -154,7 +154,7 @@ def test_eval_results_preserve_structured_failure_statuses():
                 "relevant_document_ids": ["doc-salary"],
                 "subtopics": ["审批", "复核"],
             },
-            QueryRewriteMmrRerankerCase,
+            QueryRewriteRerankerCase,
         ),
         (
             {
