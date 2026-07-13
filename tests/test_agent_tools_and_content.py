@@ -4,6 +4,8 @@ from finpilot.agent.agents.finance_qa_subagent import FinanceQaSubAgent
 from finpilot.agent.runtime import AgentRuntime
 from finpilot.config import settings
 from finpilot.context.builders import build_session_context
+from finpilot.context.compression import ContextBuilder
+from finpilot.context.summarization import SemanticSummary
 from finpilot.memory.models import MemoryContext
 from finpilot.models import (
     AgentDecision,
@@ -47,6 +49,15 @@ class DraftAnswerDecisionService:
             decision="answer",
             enough_information=True,
             draft_answer="candidate draft",
+        )
+
+
+class DeterministicSummarizer:
+    def summarize(self, **kwargs) -> SemanticSummary:
+        del kwargs
+        return SemanticSummary(
+            summary="压缩后的 RAG 证据",
+            key_facts=["保留文档事实"],
         )
 
 
@@ -150,11 +161,32 @@ def test_compatibility_answer_helper_uses_unified_answer_policy():
     assert state.context_usage["answer"]["effective_policy"] == "answer_default"
 
 
-def test_final_answer_includes_evidence_in_budgeted_bundle_without_raw_bypass():
+def test_final_answer_includes_evidence_in_budgeted_bundle_without_raw_bypass(monkeypatch):
+    builder = ContextBuilder(
+        policies={
+            "answer_default": {
+                "token_budget": 4_000,
+                "reserved_output_tokens": 512,
+                "segment_limits": {"session": 1_000, "evidence": 2_000},
+                "compression_rules": [
+                    {
+                        "name": "evidence",
+                        "path": "evidence",
+                        "method": "llm",
+                        "target_tokens": 1_000,
+                        "priority": 40,
+                    }
+                ],
+            }
+        },
+        summarizer=DeterministicSummarizer(),
+        model_context_windows={},
+    )
+    monkeypatch.setattr("finpilot.context.builders._context_builder", builder)
     answering = RecordingAnsweringService()
     runtime = AgentRuntime(answering_service=answering)
     state = _state()
-    huge_text = "RAG evidence " * 200_000
+    huge_text = "RAG evidence " * 2_000
     state.reranked_docs = [
         RagMatch(
             document_id=f"doc-{index}",
