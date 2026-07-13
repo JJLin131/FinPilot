@@ -18,7 +18,8 @@ from finpilot.evals.models import (
     RagRetrievalCase,
     ResilienceDegradationCase,
     SafetyRedteamCase,
-    ToolCallingCase,
+    ToolExecutionCase,
+    ToolSelectionCase,
     parse_eval_case,
 )
 
@@ -88,17 +89,34 @@ def test_planning_and_tool_cases_validate_domain_specific_contracts():
         required_dependencies=[["payment", "balance"]],
         expected_parallel_groups=[],
     )
-    tool = ToolCallingCase(
-        suite="tool_calling",
+    tool = ToolSelectionCase(
+        suite="tool_selection",
         case_id="tool-001",
         name="余额查询",
-        user_message="查询 ACC-001 余额",
-        expected_calls=[{"tool_name": "query_account_balance", "arguments": {"accountId": "ACC-001"}}],
-        forbidden_tools=["create_payment_order"],
+        message="查询 ACC-001 余额",
+        expected={
+            "agents": ["TreasuryDataAgent"],
+            "tool_calls": [{"tool_name": "query_account_balance", "arguments": {"accountId": "ACC-001"}}],
+        },
     )
 
     assert planning.required_dependencies == [["payment", "balance"]]
-    assert tool.expected_calls[0].tool_name == "query_account_balance"
+    assert tool.execution_mode == "live"
+    assert tool.expected.tool_calls[0].tool_name == "query_account_balance"
+
+
+def test_tool_execution_case_keeps_runtime_outcome_separate_from_model_decision():
+    case = ToolExecutionCase(
+        suite="tool_execution",
+        case_id="tool-exec-001",
+        name="余额工具执行",
+        execution_mode="controlled",
+        user_message="查询 ACC-001 余额",
+        expected_calls=[{"tool_name": "query_account_balance", "arguments": {"accountId": "ACC-001"}}],
+        expected_status="SUCCEEDED",
+    )
+
+    assert case.expected_status == "SUCCEEDED"
 
 
 def test_eval_results_preserve_structured_failure_statuses():

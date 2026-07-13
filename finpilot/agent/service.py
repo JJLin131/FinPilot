@@ -71,6 +71,9 @@ class FinPilotService:
         )
         return response
 
+    def evaluate_tool_selection(self, user_id: str, chat_id: str, content: str) -> dict:
+        return self.graph.evaluate_tool_selection(user_id, chat_id, content)
+
     def shutdown(self) -> None:
         self.memory_manager.shutdown(wait=True)
 

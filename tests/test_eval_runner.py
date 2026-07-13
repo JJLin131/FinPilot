@@ -24,9 +24,9 @@ def _write_case(root, suite: str, payload: dict):
 def test_runner_executes_controlled_suite_and_aggregates_metrics(tmp_path):
     _write_case(
         tmp_path,
-        "tool_calling",
+        "tool_execution",
         {
-            "suite": "tool_calling",
+            "suite": "tool_execution",
             "case_id": "tool-001",
             "name": "余额查询",
             "tags": ["smoke"],
@@ -61,11 +61,11 @@ def test_runner_executes_controlled_suite_and_aggregates_metrics(tmp_path):
         environment_checker=lambda requirements: [],
     )
 
-    suite = runner.run_suite("tool_calling", mode="smoke")
+    suite = runner.run_suite("tool_execution", mode="smoke")
 
     assert suite.status is EvalStatus.PASSED
     assert suite.total_cases == 1
-    assert suite.metrics["tool_sequence_accuracy"] == 1.0
+    assert suite.metrics["tool_execution_accuracy"] == 1.0
     assert audit.results == [suite]
 
 

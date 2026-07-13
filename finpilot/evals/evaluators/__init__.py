@@ -10,7 +10,8 @@ from finpilot.evals.evaluators.rag_generation import RagGenerationEvaluator
 from finpilot.evals.evaluators.rag_retrieval import RagRetrievalEvaluator
 from finpilot.evals.evaluators.resilience_degradation import ResilienceDegradationEvaluator
 from finpilot.evals.evaluators.safety_redteam import SafetyRedteamEvaluator
-from finpilot.evals.evaluators.tool_calling import ToolCallingEvaluator
+from finpilot.evals.evaluators.tool_execution import ToolExecutionEvaluator
+from finpilot.evals.evaluators.tool_selection import ToolSelectionEvaluator
 
 
 DEFAULT_EVALUATORS = {
@@ -18,7 +19,8 @@ DEFAULT_EVALUATORS = {
     "rag_generation": RagGenerationEvaluator,
     "query_rewrite_reranker": QueryRewriteRerankerEvaluator,
     "planning_orchestration": PlanningOrchestrationEvaluator,
-    "tool_calling": ToolCallingEvaluator,
+    "tool_selection": ToolSelectionEvaluator,
+    "tool_execution": ToolExecutionEvaluator,
     "end_to_end_task": EndToEndTaskEvaluator,
     "multi_turn_memory": MultiTurnMemoryEvaluator,
     "safety_redteam": SafetyRedteamEvaluator,

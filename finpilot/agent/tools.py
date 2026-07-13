@@ -98,6 +98,16 @@ class ToolRegistry:
     def list_tools(self) -> list[ToolCard]:
         return [spec.card() for spec in self._tools.values()]
 
+    def arguments_are_valid(self, tool_name: str, parameters: dict[str, Any]) -> bool:
+        spec = self._tools.get(tool_name)
+        if spec is None:
+            return False
+        try:
+            spec.args_model.model_validate(parameters)
+        except Exception:
+            return False
+        return True
+
     def max_risk_level(self, tool_names: list[str]) -> Literal["low", "medium", "high"]:
         levels = {"low": 0, "medium": 1, "high": 2}
         highest = "low"

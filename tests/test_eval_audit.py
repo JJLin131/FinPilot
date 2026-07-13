@@ -22,7 +22,7 @@ def test_file_audit_store_purges_legacy_eval_results_and_writes_schema_v2(tmp_pa
     store = FileAuditStore(tmp_path)
     store.record_eval_run(
         EvalSuiteResult(
-            suite="tool_calling",
+            suite="tool_selection",
             mode="smoke",
             status=EvalStatus.PASSED,
             total_cases=1,
@@ -31,5 +31,5 @@ def test_file_audit_store_purges_legacy_eval_results_and_writes_schema_v2(tmp_pa
     )
 
     records = [json.loads(line) for line in audit_file.read_text(encoding="utf-8").splitlines()]
-    assert [record["suite"] for record in records] == ["rag_retrieval", "tool_calling"]
+    assert [record["suite"] for record in records] == ["rag_retrieval", "tool_selection"]
     assert {record["schema_version"] for record in records} == {2}

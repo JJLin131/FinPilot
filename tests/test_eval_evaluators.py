@@ -4,13 +4,15 @@ from finpilot.evals.evaluators import DEFAULT_EVALUATORS, build_default_evaluato
 from finpilot.evals.evaluators.planning_orchestration import PlanningOrchestrationEvaluator
 from finpilot.evals.evaluators.rag_generation import RagGenerationEvaluator
 from finpilot.evals.evaluators.rag_retrieval import RagRetrievalEvaluator
-from finpilot.evals.evaluators.tool_calling import ToolCallingEvaluator
+from finpilot.evals.evaluators.tool_execution import ToolExecutionEvaluator
+from finpilot.evals.evaluators.tool_selection import ToolSelectionEvaluator
 from finpilot.evals.models import (
     EvalObservation,
     PlanningOrchestrationCase,
     RagGenerationCase,
     RagRetrievalCase,
-    ToolCallingCase,
+    ToolExecutionCase,
+    ToolSelectionCase,
 )
 from finpilot.evals.registry import EVALUATION_SUITES
 
@@ -113,14 +115,115 @@ def test_planning_evaluator_checks_agents_nodes_dependencies_and_parallel_groups
     assert result.metrics["plan_executable"] == 1.0
 
 
-def test_tool_evaluator_requires_exact_order_arguments_and_no_forbidden_calls():
-    case = ToolCallingCase(
-        suite="tool_calling",
+def test_tool_selection_evaluator_scores_agent_tool_and_semantic_arguments_separately():
+    case = ToolSelectionCase(
+        suite="tool_selection",
         case_id="tool-001",
         name="balance",
+        message="查询余额",
+        expected={
+            "agents": ["TreasuryDataAgent"],
+            "tool_calls": [
+                {
+                    "tool_name": "query_account_balance",
+                    "arguments": {"accountId": "ACC-001", "optional": None},
+                }
+            ],
+        },
+    )
+    observation = EvalObservation(
+        status="READY",
+        plan={"nodes": [{"agent_name": "TreasuryDataAgent"}]},
+        tool_calls=[
+            {
+                "agent_name": "TreasuryDataAgent",
+                "tool_name": "query_account_balance",
+                "parameters": {"accountId": "ACC-001"},
+                "schema_valid": True,
+            }
+        ],
+    )
+
+    result = ToolSelectionEvaluator().evaluate(case, observation)
+
+    assert result.passed is True
+    assert result.metrics["agent_selection_accuracy"] == 1.0
+    assert result.metrics["tool_selection_accuracy"] == 1.0
+    assert result.metrics["tool_misjudgment_rate"] == 0.0
+    assert result.metrics["argument_accuracy"] == 1.0
+    assert result.metrics["parameter_error_rate"] == 0.0
+    assert result.metrics["argument_schema_validity"] == 1.0
+
+
+def test_tool_selection_keeps_parameter_accuracy_when_expected_call_is_correct_but_extra_tool_exists():
+    case = ToolSelectionCase(
+        suite="tool_selection",
+        case_id="tool-extra-001",
+        name="payment with over-planning",
+        message="创建付款单",
+        expected={
+            "agents": ["TreasuryOperationAgent"],
+            "tool_calls": [
+                {
+                    "agent_name": "TreasuryOperationAgent",
+                    "tool_name": "create_payment_order",
+                    "arguments": {
+                        "accountId": "ACC-001",
+                        "payeeAccountId": "ACC-002",
+                        "amount": 100,
+                        "currency": "CNY",
+                        "purpose": "工资",
+                    },
+                }
+            ],
+        },
+    )
+    observation = EvalObservation(
+        status="READY",
+        plan={
+            "nodes": [
+                {"agent_name": "TreasuryDataAgent"},
+                {"agent_name": "TreasuryOperationAgent"},
+            ]
+        },
+        tool_calls=[
+            {
+                "agent_name": "TreasuryDataAgent",
+                "tool_name": "query_treasury_account",
+                "parameters": {"accountId": "ACC-001"},
+                "schema_valid": True,
+            },
+            {
+                "agent_name": "TreasuryOperationAgent",
+                "tool_name": "create_payment_order",
+                "parameters": {
+                    "accountId": "ACC-001",
+                    "payeeAccountId": "ACC-002",
+                    "amount": 100,
+                    "currency": "CNY",
+                    "purpose": "工资",
+                },
+                "schema_valid": True,
+            },
+        ],
+    )
+
+    result = ToolSelectionEvaluator().evaluate(case, observation)
+
+    assert result.metrics["tool_selection_accuracy"] == 0.0
+    assert result.metrics["extra_tool_count"] == 1.0
+    assert result.metrics["argument_accuracy"] == 1.0
+    assert result.metrics["parameter_error_rate"] == 0.0
+
+
+def test_tool_execution_evaluator_scores_runtime_status_and_actual_invocation():
+    case = ToolExecutionCase(
+        suite="tool_execution",
+        case_id="tool-exec-001",
+        name="balance execution",
         user_message="查询余额",
         expected_calls=[{"tool_name": "query_account_balance", "arguments": {"accountId": "ACC-001"}}],
-        forbidden_tools=["create_payment_order"],
+        expected_status="SUCCEEDED",
     )
     observation = EvalObservation(
         status="SUCCEEDED",
@@ -129,13 +232,11 @@ def test_tool_evaluator_requires_exact_order_arguments_and_no_forbidden_calls():
         ],
     )
 
-    result = ToolCallingEvaluator().evaluate(case, observation)
+    result = ToolExecutionEvaluator().evaluate(case, observation)
 
     assert result.passed is True
-    assert result.metrics["tool_sequence_accuracy"] == 1.0
-    assert result.metrics["tool_misjudgment_rate"] == 0.0
-    assert result.metrics["argument_exact_match"] == 1.0
-    assert result.metrics["parameter_error_rate"] == 0.0
+    assert result.metrics["execution_status_match"] == 1.0
+    assert result.metrics["tool_execution_accuracy"] == 1.0
 
 
 def test_default_evaluator_registry_covers_every_executable_suite():

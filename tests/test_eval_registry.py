@@ -9,9 +9,9 @@ from finpilot.evals.loader import EvalDatasetError, load_eval_cases
 from finpilot.evals.registry import DEFAULT_SUITE_REGISTRY, EVALUATION_SUITES
 
 
-def test_default_registry_contains_only_the_eleven_executable_suites():
+def test_default_registry_contains_only_the_twelve_executable_suites():
     assert set(DEFAULT_SUITE_REGISTRY.names()) == set(EVALUATION_SUITES)
-    assert len(EVALUATION_SUITES) == 11
+    assert len(EVALUATION_SUITES) == 12
     assert "routing" not in EVALUATION_SUITES
     assert "regression_release_gate" not in EVALUATION_SUITES
 
@@ -67,11 +67,14 @@ def test_coverage_requires_every_runtime_agent_tool_document_and_fault_component
         ),
         DEFAULT_SUITE_REGISTRY.parse(
             {
-                "suite": "tool_calling",
+                "suite": "tool_selection",
                 "case_id": "tool-001",
                 "name": "余额工具",
-                "user_message": "查询余额",
-                "expected_calls": [{"tool_name": "query_account_balance", "arguments": {}}],
+                "message": "查询余额",
+                "expected": {
+                    "agents": ["TreasuryDataAgent"],
+                    "tool_calls": [{"tool_name": "query_account_balance", "arguments": {}}],
+                },
             }
         ),
         DEFAULT_SUITE_REGISTRY.parse(
@@ -105,7 +108,6 @@ def test_coverage_requires_every_runtime_agent_tool_document_and_fault_component
 
     assert report.complete is False
     assert report.missing == {
-        "agents": ["TreasuryDataAgent"],
         "tools": ["query_transactions"],
         "document_ids": ["doc-receipt"],
         "fault_components": ["chroma"],

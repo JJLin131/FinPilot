@@ -64,6 +64,12 @@ class AgentRuntime:
         node_id: str,
         task: str,
     ) -> SubAgentResult:
+        runtime_start = {
+            "issues": len(state.issues),
+            "tool_invocations": len(state.tool_invocations),
+            "safety_findings": len(state.safety_findings),
+            "context_compactions": len(state.context_compactions),
+        }
         subagent_context = subagent_context.model_copy(update={"assigned_task": task})
         session_context = build_session_context(state)
         loop_context = init_loop_context(state, subagent_context)
@@ -106,7 +112,34 @@ class AgentRuntime:
             loop_context.stop_reason = "max_steps"
 
         self._sync_loop_state(state, loop_context)
-        return self._build_execution_result(state, subagent_context, loop_context, node_id=node_id, task=task)
+        return self._build_execution_result(
+            state,
+            subagent_context,
+            loop_context,
+            node_id=node_id,
+            task=task,
+            runtime_start=runtime_start,
+        )
+
+    def decide_once_without_execution(
+        self,
+        state: GraphState,
+        subagent_context: SubAgentContext,
+        *,
+        task: str,
+    ) -> AgentDecision:
+        """Return the SubAgent's real first decision, stopping before tool execution."""
+        preview_state = state.model_copy(deep=True)
+        context = subagent_context.model_copy(update={"assigned_task": task})
+        session_context = build_session_context(preview_state)
+        loop_context = init_loop_context(preview_state, context)
+        return self._decide(
+            session_context,
+            context,
+            loop_context,
+            preview_state,
+            summary_cache={},
+        )
 
     def _decide(
         self,
@@ -289,7 +322,14 @@ class AgentRuntime:
         *,
         node_id: str,
         task: str,
+        runtime_start: dict[str, int] | None = None,
     ) -> SubAgentResult:
+        start = runtime_start or {
+            "issues": 0,
+            "tool_invocations": 0,
+            "safety_findings": 0,
+            "context_compactions": 0,
+        }
         observations = [step.observation for step in loop_context.step_history if step.observation is not None]
         status = "SUCCEEDED"
         failure_reason = None
@@ -317,6 +357,20 @@ class AgentRuntime:
             evidence_summary=[item.model_dump(mode="json") for item in state.evidence],
             failure_reason=failure_reason,
             raw_evidence=raw_evidence,
+            runtime_data={
+                "issues": [item.model_dump(mode="json") for item in state.issues[start["issues"] :]],
+                "tool_invocations": [
+                    item.model_dump(mode="json")
+                    for item in state.tool_invocations[start["tool_invocations"] :]
+                ],
+                "safety_findings": [
+                    item.model_dump(mode="json")
+                    for item in state.safety_findings[start["safety_findings"] :]
+                ],
+                "context_usage": state.context_usage,
+                "context_compactions": state.context_compactions[start["context_compactions"] :],
+                "loop_count": loop_context.step_index,
+            },
         )
 
     @staticmethod

@@ -23,9 +23,18 @@
       "dependency_f1": {"min": 0.95},
       "plan_executable": {"min": 1.0}
     },
-    "tool_calling": {
-      "tool_sequence_accuracy": {"min": 0.95},
-      "argument_exact_match": {"min": 0.95},
+    "tool_selection": {
+      "agent_selection_accuracy": {"min": 0.95},
+      "tool_selection_accuracy": {"min": 0.95},
+      "tool_misjudgment_rate": {"max": 0.05},
+      "argument_accuracy": {"min": 0.95},
+      "parameter_error_rate": {"max": 0.05},
+      "argument_schema_validity": {"min": 1.0}
+    },
+    "tool_execution": {
+      "execution_status_match": {"min": 0.95},
+      "tool_execution_accuracy": {"min": 0.95},
+      "execution_argument_accuracy": {"min": 0.95},
       "forbidden_tool_count": {"max": 0}
     },
     "end_to_end_task": {

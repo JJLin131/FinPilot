@@ -12,6 +12,7 @@ from finpilot.evals.models import (
     MultiTurnMemoryCase,
     QueryRewriteRerankerCase,
     RagRetrievalCase,
+    ToolSelectionCase,
 )
 from finpilot.observability.capture import capture_observability
 from finpilot.usage import capture_usage
@@ -86,6 +87,8 @@ class LiveBackend:
         )
 
     def _execute(self, case: BaseEvalCase) -> EvalObservation:
+        if isinstance(case, ToolSelectionCase):
+            return self._execute_tool_selection(case)
         if isinstance(case, RagRetrievalCase):
             return self._execute_retrieval(case)
         if isinstance(case, QueryRewriteRerankerCase):
@@ -108,6 +111,18 @@ class LiveBackend:
             tool_calls=list(response_payload.get("tool_calls") or []),
             final_state=final_state,
             duration_ms=duration_ms,
+        )
+
+    def _execute_tool_selection(self, case: ToolSelectionCase) -> EvalObservation:
+        chat_id = f"eval-{self.run_id}-{case.case_id}"
+        started = time.perf_counter()
+        selection = self.agent_service.evaluate_tool_selection(self.user_id, chat_id, case.message)
+        return EvalObservation(
+            status=str(selection.get("status") or "FAILED"),
+            response={"decisions": list(selection.get("decisions") or [])},
+            plan=dict(selection.get("plan") or {}),
+            tool_calls=list(selection.get("tool_calls") or []),
+            duration_ms=round((time.perf_counter() - started) * 1000, 3),
         )
 
     def _response_final_state(self, case: BaseEvalCase, chat_id: str, response_payload: dict) -> dict:
@@ -170,7 +185,7 @@ class LiveBackend:
     def _messages(case: BaseEvalCase) -> list[str]:
         if isinstance(case, (EndToEndTaskCase, MultiTurnMemoryCase)):
             return [turn.content for turn in case.turns if turn.role == "user"]
-        for field in ("user_message", "prompt", "question", "query"):
+        for field in ("message", "user_message", "prompt", "question", "query"):
             value = getattr(case, field, None)
             if isinstance(value, str) and value.strip():
                 return [value]

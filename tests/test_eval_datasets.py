@@ -4,11 +4,14 @@ import json
 import uuid
 from pathlib import Path
 
+from finpilot.agent.agents.finance_qa_subagent import FinanceQaSubAgent
+from finpilot.agent.agents.treasury_data_agent import TreasuryDataAgent
+from finpilot.agent.agents.treasury_operation_agent import TreasuryOperationAgent
 from finpilot.agent.tools import ToolRegistry
 from finpilot.evals.coverage import CoverageInventory, validate_coverage
 from finpilot.evals.loader import load_eval_cases
 from finpilot.evals.registry import DEFAULT_SUITE_REGISTRY, EVALUATION_SUITES
-from finpilot.evals.models import ToolCallingCase
+from finpilot.evals.models import ToolSelectionCase
 
 
 class EmptyRagService:
@@ -42,9 +45,10 @@ def test_datasets_cover_runtime_agents_tools_documents_and_fault_components():
         for case in load_eval_cases(root / f"{suite}.jsonl", DEFAULT_SUITE_REGISTRY)
     ]
     registry = ToolRegistry(EmptyRagService())
+    agents = [FinanceQaSubAgent(), TreasuryDataAgent(), TreasuryOperationAgent()]
     inventory = CoverageInventory(
         agents={"QueryAgent", "TreasuryDataAgent", "TreasuryOperationAgent"},
-        tools=set(registry._tools),
+        tools={tool.name for agent in agents for tool in agent.build_context(registry).allowed_tools},
         document_ids={
             f"resource-finance-{uuid.uuid5(uuid.NAMESPACE_URL, path.name)}"
             for path in Path("src/main/resources").glob("*.md")
@@ -79,13 +83,18 @@ def test_release_gate_has_metric_thresholds_for_every_executable_suite():
     assert {"ENV_UNAVAILABLE", "FIXTURE_UNAVAILABLE", "EVALUATOR_ERROR"} <= set(config["blocking_statuses"])
 
 
-def test_tool_calling_expected_arguments_match_runtime_schemas_exactly():
+def test_tool_selection_expectations_match_real_subagent_allowlists_and_tool_schemas():
     registry = ToolRegistry(EmptyRagService())
-    cases = load_eval_cases(Path("evals/datasets/tool_calling.jsonl"), DEFAULT_SUITE_REGISTRY)
+    cases = load_eval_cases(Path("evals/datasets/tool_selection.jsonl"), DEFAULT_SUITE_REGISTRY)
+    agents = {
+        agent.name: {tool.name for tool in agent.build_context(registry).allowed_tools}
+        for agent in [FinanceQaSubAgent(), TreasuryDataAgent(), TreasuryOperationAgent()]
+    }
 
     for case in cases:
-        assert isinstance(case, ToolCallingCase)
-        for expected in case.expected_calls:
-            spec = registry._tools[expected.tool_name]
-            normalized = spec.args_model.model_validate(expected.arguments).model_dump()
-            assert normalized == expected.arguments
+        assert isinstance(case, ToolSelectionCase)
+        assert set(case.expected.agents) <= set(agents)
+        for expected in case.expected.tool_calls:
+            assert expected.agent_name in case.expected.agents
+            assert expected.tool_name in agents[expected.agent_name]
+            assert registry.arguments_are_valid(expected.tool_name, expected.arguments)

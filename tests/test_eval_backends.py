@@ -9,7 +9,8 @@ from finpilot.evals.models import (
     QueryRewriteRerankerCase,
     RagRetrievalCase,
     ResilienceDegradationCase,
-    ToolCallingCase,
+    ToolExecutionCase,
+    ToolSelectionCase,
 )
 
 
@@ -58,8 +59,8 @@ def test_controlled_backend_missing_fixture_is_structured_failure():
 
 
 def test_controlled_backend_accepts_inline_observation_fixture():
-    case = ToolCallingCase(
-        suite="tool_calling",
+    case = ToolExecutionCase(
+        suite="tool_execution",
         case_id="inline-001",
         name="内联可控替身",
         execution_mode="controlled",
@@ -92,8 +93,8 @@ def test_live_backend_runs_all_conversation_turns_with_isolated_identity():
                 {"model_dump": lambda self, mode="json": {"status": "SUCCEEDED", "answer": f"answer:{content}"}},
             )()
 
-    case = ToolCallingCase(
-        suite="tool_calling",
+    case = ToolExecutionCase(
+        suite="tool_execution",
         case_id="live-001",
         name="真实余额查询",
         execution_mode="live",
@@ -106,6 +107,46 @@ def test_live_backend_runs_all_conversation_turns_with_isolated_identity():
     assert calls == [("eval-user", "eval-run-123-live-001", "查询 ACC-001 余额")]
     assert observation.status == "SUCCEEDED"
     assert observation.response["answer"] == "answer:查询 ACC-001 余额"
+
+
+def test_live_backend_runs_subagent_tool_selection_without_executing_chat():
+    calls: list[tuple[str, str, str]] = []
+
+    class Service:
+        def evaluate_tool_selection(self, user_id: str, chat_id: str, content: str):
+            calls.append((user_id, chat_id, content))
+            return {
+                "status": "READY",
+                "plan": {"nodes": [{"agent_name": "TreasuryDataAgent"}]},
+                "tool_calls": [
+                    {
+                        "agent_name": "TreasuryDataAgent",
+                        "tool_name": "query_account_balance",
+                        "parameters": {"accountId": "ACC-001"},
+                        "schema_valid": True,
+                    }
+                ],
+            }
+
+        def chat(self, *args, **kwargs):
+            raise AssertionError("tool selection evaluation must not execute chat")
+
+    case = ToolSelectionCase(
+        suite="tool_selection",
+        case_id="selection-live",
+        name="余额工具决策",
+        message="查询 ACC-001 余额",
+        expected={
+            "agents": ["TreasuryDataAgent"],
+            "tool_calls": [{"tool_name": "query_account_balance", "arguments": {"accountId": "ACC-001"}}],
+        },
+    )
+
+    observation = LiveBackend(Service(), user_id="eval-user", run_id="run-123").execute(case)
+
+    assert calls == [("eval-user", "eval-run-123-selection-live", "查询 ACC-001 余额")]
+    assert observation.tool_calls[0]["tool_name"] == "query_account_balance"
+    assert observation.plan["nodes"][0]["agent_name"] == "TreasuryDataAgent"
 
 
 def test_live_backend_runs_retrieval_directly_and_exposes_ranked_documents():

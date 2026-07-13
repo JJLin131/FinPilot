@@ -96,13 +96,29 @@ class PlanningOrchestrationCase(BaseEvalCase):
 class ExpectedToolCall(StrictEvalModel):
     tool_name: str = Field(min_length=1)
     arguments: dict[str, Any] = Field(default_factory=dict)
+    agent_name: str | None = None
 
 
-class ToolCallingCase(BaseEvalCase):
-    suite: Literal["tool_calling"]
+class ToolSelectionExpected(StrictEvalModel):
+    status: Literal["READY", "UNSUPPORTED"] = "READY"
+    agents: list[str] = Field(default_factory=list)
+    tool_calls: list[ExpectedToolCall] = Field(default_factory=list)
+    order_matters: bool = False
+
+
+class ToolSelectionCase(BaseEvalCase):
+    suite: Literal["tool_selection"]
+    execution_mode: Literal["live"] = "live"
+    message: str = Field(min_length=1)
+    expected: ToolSelectionExpected
+
+
+class ToolExecutionCase(BaseEvalCase):
+    suite: Literal["tool_execution"]
     user_message: str = Field(min_length=1)
     expected_calls: list[ExpectedToolCall] = Field(default_factory=list)
     forbidden_tools: list[str] = Field(default_factory=list)
+    expected_status: str | None = None
     expected_final_state: dict[str, Any] = Field(default_factory=dict)
     idempotency_key: str | None = None
 
@@ -177,7 +193,8 @@ CASE_MODELS: dict[str, type[BaseEvalCase]] = {
     "rag_generation": RagGenerationCase,
     "query_rewrite_reranker": QueryRewriteRerankerCase,
     "planning_orchestration": PlanningOrchestrationCase,
-    "tool_calling": ToolCallingCase,
+    "tool_selection": ToolSelectionCase,
+    "tool_execution": ToolExecutionCase,
     "end_to_end_task": EndToEndTaskCase,
     "multi_turn_memory": MultiTurnMemoryCase,
     "safety_redteam": SafetyRedteamCase,

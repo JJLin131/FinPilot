@@ -122,6 +122,53 @@ class FinPilotGraph:
             self.memory_manager.remember_interaction(state.memory_id, user_id, chat_id, content, response)
             return response
 
+    def evaluate_tool_selection(self, user_id: str, chat_id: str, content: str) -> dict[str, Any]:
+        """Run the real planner and selected SubAgents, stopping before tool execution."""
+        request_id = str(uuid.uuid4())
+        state = GraphState(
+            request_id=request_id,
+            trace_id=current_trace_id(),
+            user_id=user_id,
+            chat_id=chat_id,
+            memory_id=f"chat:{user_id}:{chat_id}",
+            user_message=content,
+        )
+        planned = GraphState.model_validate(self._plan_build(state.model_dump()))
+        plan_payload = dict(planned.execution_plan)
+        if planned.planning_status != "READY":
+            return {
+                "status": "UNSUPPORTED" if planned.planning_status == "UNSUPPORTED" else "FAILED",
+                "plan": plan_payload,
+                "tool_calls": [],
+                "decisions": [],
+            }
+        instances = self._agent_instances()
+        decisions: list[dict[str, Any]] = []
+        tool_calls: list[dict[str, Any]] = []
+        for node in ExecutionPlan.model_validate(plan_payload).nodes:
+            agent = instances[node.agent_name]
+            context = agent.build_context(self.tools)
+            decision = agent.runtime.decide_once_without_execution(planned, context, task=node.task)
+            decision_payload = decision.model_dump(mode="json")
+            decision_payload.update({"agent_name": node.agent_name, "node_id": node.node_id})
+            decisions.append(decision_payload)
+            if decision.decision != "act" or not decision.tool_name:
+                continue
+            tool_calls.append(
+                {
+                    "agent_name": node.agent_name,
+                    "tool_name": decision.tool_name,
+                    "parameters": dict(decision.tool_args),
+                    "schema_valid": self.tools.arguments_are_valid(decision.tool_name, decision.tool_args),
+                }
+            )
+        return {
+            "status": "READY",
+            "plan": plan_payload,
+            "tool_calls": tool_calls,
+            "decisions": decisions,
+        }
+
     def _build_graph(self):
         builder = StateGraph(dict)
         builder.add_node("input_safety_review", self._input_safety_review)

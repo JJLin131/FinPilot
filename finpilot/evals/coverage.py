@@ -7,7 +7,8 @@ from finpilot.evals.models import (
     PlanningOrchestrationCase,
     RagRetrievalCase,
     ResilienceDegradationCase,
-    ToolCallingCase,
+    ToolExecutionCase,
+    ToolSelectionCase,
 )
 
 
@@ -31,7 +32,10 @@ def validate_coverage(cases: list[BaseEvalCase], inventory: CoverageInventory) -
     for case in cases:
         if isinstance(case, PlanningOrchestrationCase):
             covered_agents.update(case.expected_agents)
-        elif isinstance(case, ToolCallingCase):
+        elif isinstance(case, ToolSelectionCase):
+            covered_agents.update(case.expected.agents)
+            covered_tools.update(call.tool_name for call in case.expected.tool_calls)
+        elif isinstance(case, ToolExecutionCase):
             covered_tools.update(call.tool_name for call in case.expected_calls)
         elif isinstance(case, RagRetrievalCase):
             covered_documents.update(case.relevant_document_ids)

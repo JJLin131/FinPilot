@@ -146,6 +146,21 @@ def test_treasury_data_agent_fallback_executes_balance_query_without_composing_a
     assert answering.evidence == []
 
 
+def test_subagent_execution_result_preserves_tool_invocations_for_graph_merge():
+    agent = TreasuryDataAgent(runtime=AgentRuntime(decision_service=FailingDecisionService()))
+    registry = ToolRegistry(EmptyRagService(), safety=SafetyReviewService())
+
+    result = agent.execute(
+        _state(),
+        registry,
+        node_id="balance",
+        task="query account balance for ACC-001",
+    )
+
+    assert result.runtime_data["tool_invocations"][0]["tool_name"] == "query_account_balance"
+    assert result.runtime_data["tool_invocations"][0]["parameters"] == {"accountId": "ACC-001"}
+
+
 def test_high_risk_treasury_operation_requires_approval():
     registry = ToolRegistry(EmptyRagService(), safety=SafetyReviewService())
 

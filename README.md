@@ -38,7 +38,7 @@ FinPilot 是一个面向企业财资管理场景的智能系统原型。它通�
 | 财资操作办理 | 可用，模拟执行 | `TreasuryOperationAgent` 暴露付款、转账、单据下载等操作工具，并进入安全审查与审批链路。 |
 | 安全审查 | 可用 | 输入、工具参数、工具结果、最终回答均可产生结构化 finding、issue 和审计记录。 |
 | 可观测性 | 可用 | 支持健康检查、readyz、审计表、OpenTelemetry、Langfuse 可选集成。 |
-| 评测闭环 | 可用 | 11 个严格 JSONL suite 覆盖 RAG、改写重排、规划、工具、端到端、记忆、安全、韧性、性能成本与可观测性，并提供发布门禁。 |
+| 评测闭环 | 可用 | 12 个严格 JSONL suite 覆盖 RAG、改写重排、规划、工具选择、工具执行、端到端、记忆、安全、韧性、性能成本与可观测性，并提供发布门禁。 |
 
 ## 系统架构
 
@@ -247,7 +247,7 @@ finpilot eval run rag_retrieval --mode regression
 finpilot eval run --mode release
 ```
 
-评测数据位于 `evals/datasets`，包括 `rag_retrieval`、`rag_generation`、`query_rewrite_reranker`、`planning_orchestration`、`tool_calling`、`end_to_end_task`、`multi_turn_memory`、`safety_redteam`、`resilience_degradation`、`performance_cost`、`observability_audit`。发布阈值位于 `evals/release_gate.json`。
+评测数据位于 `evals/datasets`，包括 `rag_retrieval`、`rag_generation`、`query_rewrite_reranker`、`planning_orchestration`、`tool_selection`、`tool_execution`、`end_to_end_task`、`multi_turn_memory`、`safety_redteam`、`resilience_degradation`、`performance_cost`、`observability_audit`。其中 `tool_selection` 运行真实 Planner 与所选 SubAgent 的首步决策，但在工具执行前截停；`tool_execution` 单独验证真实调用结果与副作用。发布阈值位于 `evals/release_gate.json`。
 
 每次 `finpilot eval run` 都会在 `evals/reports` 自动生成指标型 Markdown 报告；可用 `--report-dir` 指定其他目录。报告按 RAG、规划、工具调用等能力汇总召回率、MRR、计划可行率、工具误判率、参数错误率、性能成本等指标，并复用发布门禁阈值给出达标结论。Langfuse 继续用于 trace 下钻和版本趋势分析，Markdown 用于版本验收与归档。
 

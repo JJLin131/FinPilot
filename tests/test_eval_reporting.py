@@ -24,8 +24,8 @@ def test_report_summarizes_capability_metrics_instead_of_case_log(tmp_path):
         _case("planning_orchestration", "plan-2", {"plan_executable": 0.0, "dependency_f1": 1.0}, passed=False),
     ]
     tool_cases = [
-        _case("tool_calling", "tool-1", {"tool_sequence_accuracy": 1.0, "argument_exact_match": 0.0}),
-        _case("tool_calling", "tool-2", {"tool_sequence_accuracy": 0.0, "argument_exact_match": 1.0}, passed=False),
+        _case("tool_selection", "tool-1", {"tool_selection_accuracy": 1.0, "argument_accuracy": 0.0}),
+        _case("tool_selection", "tool-2", {"tool_selection_accuracy": 0.0, "argument_accuracy": 1.0}, passed=False),
     ]
     suites = [
         EvalSuiteResult(
@@ -47,13 +47,13 @@ def test_report_summarizes_capability_metrics_instead_of_case_log(tmp_path):
             metrics={"plan_executable": 0.5, "dependency_f1": 0.9},
         ),
         EvalSuiteResult(
-            suite="tool_calling",
+            suite="tool_selection",
             mode="release",
             status=EvalStatus.FAILED,
             total_cases=2,
             passed_cases=1,
             results=tool_cases,
-            metrics={"tool_sequence_accuracy": 0.5, "argument_exact_match": 0.5},
+            metrics={"tool_selection_accuracy": 0.5, "argument_accuracy": 0.5},
         ),
     ]
     run = EvalRunResult(
@@ -66,9 +66,9 @@ def test_report_summarizes_capability_metrics_instead_of_case_log(tmp_path):
         "metric_thresholds": {
             "rag_retrieval": {"recall_at_5": {"min": 0.9}, "mrr": {"min": 0.7}},
             "planning_orchestration": {"plan_executable": {"min": 1.0}},
-            "tool_calling": {
-                "tool_sequence_accuracy": {"min": 0.95},
-                "argument_exact_match": {"min": 0.95},
+            "tool_selection": {
+                "tool_selection_accuracy": {"min": 0.95},
+                "argument_accuracy": {"min": 0.95},
             },
         }
     }

@@ -65,20 +65,20 @@ def test_publish_eval_suite_scores_creates_trace_and_numeric_scores(monkeypatch)
 
     monkeypatch.setattr(langfuse_support, "get_langfuse_client", lambda: Client())
     suite = EvalSuiteResult(
-        suite="tool_calling",
+        suite="tool_selection",
         mode="release",
         status=EvalStatus.FAILED,
         total_cases=4,
         passed_cases=3,
-        metrics={"tool_sequence_accuracy": 0.75, "parameter_error_rate": 0.25},
+        metrics={"tool_selection_accuracy": 0.75, "parameter_error_rate": 0.25},
     )
 
     langfuse_support.publish_eval_suite_scores(suite, run_id="run-1")
 
     assert captured["seed"] == "finpilot-eval:run-1"
-    assert captured["span"]["name"] == "eval.tool_calling"
+    assert captured["span"]["name"] == "eval.tool_selection"
     scores = {item["name"]: item for item in captured["scores"]}
-    assert scores["eval.tool_calling.pass_rate"]["value"] == 0.75
-    assert scores["eval.tool_calling.tool_sequence_accuracy"]["value"] == 0.75
-    assert scores["eval.tool_calling.parameter_error_rate"]["value"] == 0.25
+    assert scores["eval.tool_selection.pass_rate"]["value"] == 0.75
+    assert scores["eval.tool_selection.tool_selection_accuracy"]["value"] == 0.75
+    assert scores["eval.tool_selection.parameter_error_rate"]["value"] == 0.25
     assert all(item["trace_id"] == "trace-eval-1" for item in scores.values())
