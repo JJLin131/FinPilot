@@ -11,321 +11,152 @@
 
 # FinPilot
 
-FinPilot 是一个面向企业财资管理场景的智能系统原型。它通过 `FastAPI + LangGraph + RAG + memory + audit + observability` 组织多 Agent 流程，提供业务知识问答、财资数据查询、受控模拟操作、安全审查、评测 smoke 和运行时健康检查。
+FinPilot 是一个面向企业财资管理场景的智能 Agent 原型。系统能够理解自然语言任务，完成财资知识问答、账户与交易数据查询、受控模拟操作，并通过多 Agent 协作、安全审批和审计记录保证执行过程可追踪。
 
-当前项目重点是 Agent 编排层和治理底座：业务对象、真实账户/流水/付款/回单等后端能力会由外部系统提供，FinPilot 通过工具接口接入。仓库内的资金操作工具是模拟执行器，用于验证意图识别、工具调用、安全审查、审批和审计链路，不应被当作真实资金处理系统直接上线。
+> [在线查看 FinPilot 项目展示页](https://finpilot-showcase.pages.dev/)
 
-## 目录
+## 核心功能
 
-- [核心能力](#核心能力)
-- [系统架构](#系统架构)
-- [Agent 与意图](#agent-与意图)
-- [快速开始](#快速开始)
-- [API 示例](#api-示例)
-- [配置与部署](#配置与部署)
-- [评测与观测](#评测与观测)
-- [安全治理](#安全治理)
-- [项目结构](#项目结构)
-- [排障手册](#排障手册)
-- [路线图](#路线图)
+| 功能 | 说明 |
+| --- | --- |
+| 财资知识问答 | 根据企业制度、银行规则和财资知识回答业务问题，并给出可追溯依据。 |
+| 财资数据查询 | 查询账户、余额、交易流水、回单状态和资金池头寸等信息。 |
+| 受控模拟操作 | 支持创建付款单、转账单和下载回单，用于验证操作链路，不处理真实资金。 |
+| 多任务协作 | 将复杂请求拆分为知识检索、数据查询和业务操作等任务，按依赖关系协调执行。 |
+| 会话与用户记忆 | 保留多轮对话上下文和用户级信息，支持连续任务处理。 |
+| 安全与审计 | 对输入、工具参数、操作风险、工具结果和最终回答进行审查，并记录审批与调用过程。 |
 
-## 核心能力
-
-| 能力 | 当前状态 | 说明 |
-| --- | --- | --- |
-| 业务知识问答 | 可用 | 基于共享知识库、BM25、可选向量检索和答案生成，适合财务制度、财资知识、流程解释。 |
-| 财资数据查询 | 可用，模拟数据 | `TreasuryDataAgent` 暴露余额、账户、流水、回单状态、资金池信息等只读工具。 |
-| 财资操作办理 | 可用，模拟执行 | `TreasuryOperationAgent` 暴露付款、转账、单据下载等操作工具，并进入安全审查与审批链路。 |
-| 安全审查 | 可用 | 输入、工具参数、工具结果、最终回答均可产生结构化 finding、issue 和审计记录。 |
-| 可观测性 | 可用 | 支持健康检查、readyz、审计表、OpenTelemetry、Langfuse 可选集成。 |
-| 评测闭环 | 可用 | 12 个严格 JSONL suite 覆盖 RAG、改写重排、规划、工具选择、工具执行、端到端、记忆、安全、韧性、性能成本与可观测性，并提供发布门禁。 |
-
-## 系统架构
+## 工作流程
 
 ```mermaid
 flowchart LR
-    User["User / CLI / API Client"] --> API["FastAPI<br/>/api/finance/chat"]
-    API --> Service["FinPilotService"]
-    Service --> Graph["LangGraph Runtime"]
-    Graph --> Memory["User Memory<br/>chat/profile/semantic"]
-    Graph --> Intent["Intent Classifier"]
-    Intent --> Query["QueryAgent"]
-    Intent --> Data["TreasuryDataAgent"]
-    Intent --> Operation["TreasuryOperationAgent"]
-    Query --> RAG["Shared Knowledge RAG<br/>BM25 + optional Chroma"]
-    Data --> DataTools["Read-only Treasury Tools<br/>account/balance/flow/receipt/pool"]
-    Operation --> OpTools["Governed Operation Tools<br/>payment/transfer/download"]
-    OpTools --> Safety["Safety Review + Approval"]
-    DataTools --> Audit["Audit Store"]
-    Safety --> Audit
-    RAG --> Audit
-    Graph --> Response["AgentChatResponse<br/>answer/issues/trace"]
+    User["用户 / CLI / API"] --> Safety["输入安全检查"]
+    Safety --> Context["加载会话与记忆"]
+    Context --> Planner["Planner 拆分任务"]
+    Planner --> DAG["DAG 调度执行"]
+    DAG --> Agents["知识 / 数据 / 操作 Agent"]
+    Agents --> Tools["RAG 与业务工具"]
+    Tools --> Answer["聚合证据并生成回答"]
+    Answer --> Review["回答审查与审计"]
 ```
 
-FinPilot 的边界是“智能编排与治理”。真实财资主数据、账户余额、流水、付款指令、单据文件等应来自后端业务系统；Agent 层负责识别意图、选择能力、调用工具、审查风险、组织回答和记录审计。
+Planner 根据用户目标生成执行计划。相互独立的只读任务可以并行处理，付款和转账等操作任务按顺序执行；当前置任务失败或被安全策略阻断时，依赖任务不会继续执行。所有 Agent 结果最终由统一回答节点进行汇总。
 
-## LangGraph 流程
+## 项目架构
 
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant S as FinPilotService
-    participant G as LangGraph
-    participant M as Memory
-    participant I as Intent Classifier
-    participant A as Routed Agent
-    participant T as Tool/RAG
-    participant R as Safety Review
-    participant D as Audit
+| 模块 | 职责 |
+| --- | --- |
+| FastAPI / CLI | 提供 HTTP 接口、单次问答和交互式会话入口。 |
+| LangGraph | 管理输入审查、上下文、规划、执行、回答和审计流程。 |
+| Planner / DAG | 拆分复杂任务，校验依赖关系并调度专业 Agent。 |
+| QueryAgent | 处理财务制度和财资知识问答。 |
+| TreasuryDataAgent | 处理账户、余额、流水和资金池等只读查询。 |
+| TreasuryOperationAgent | 处理付款、转账和回单下载等受控操作。 |
+| RAG / Memory | 提供知识检索、会话记忆和用户级长期记忆。 |
+| Safety / Observability | 提供审批、脱敏、审计、链路追踪和能力评测。 |
 
-    C->>S: chat request
-    S->>G: create runtime state
-    G->>M: load user-scoped memory
-    G->>I: classify intent
-    I-->>G: route label
-    G->>A: invoke Query/Data/Operation agent
-    A->>R: review input/tool args
-    A->>T: retrieve or execute tool
-    T-->>A: evidence/result
-    A->>R: review tool result and answer
-    A-->>G: answer + issues + trace
-    G->>M: persist memory
-    G->>D: write audit events
-    G-->>S: AgentChatResponse
-    S-->>C: public or debug response
-```
-
-## Agent 与意图
-
-| 意图 | Agent | 典型问题 | 说明 |
-| --- | --- | --- | --- |
-| `FINANCE_KNOWLEDGE_QA` | `QueryAgent` | “工资发放审批规则是什么？” | 财务/财资知识统一走知识问答，不再单独拆一个 treasury knowledge intent。 |
-| `GENERAL_KNOWLEDGE_QA` | `QueryAgent` | “解释一下资金池的概念。” | 通用知识咨询也由知识问答 Agent 处理。 |
-| `TREASURY_DATA_QUERY` | `TreasuryDataAgent` | “查询 1001 账户余额。” | 只读数据查询，工具默认不触发高风险操作审批。 |
-| `TREASURY_OPERATION` | `TreasuryOperationAgent` | “发起一笔付款单。” | 操作类能力，按工具定义中的 `risk_level` 进入审查和审批。 |
-| `UNKNOWN` | fallback | “帮我做一个无关任务。” | 无法识别或不支持的请求会返回结构化 issue。 |
-
-工具按 Agent 可见性隔离，而不是把每个后端服务都拆成一个 Agent。数据查询和资金操作分开，是为了把只读链路和变更链路的校验、审批、审计强度区分开。
-
-## 快速开始
+## 快速启动
 
 ### 环境要求
 
+- PowerShell 7
 - Python 3.12+
-- Docker Desktop
-- MySQL，默认数据库名 `work_memory`
-- 使用 DeepSeek 时需要 `DEEPSEEK_API_KEY`
-- 可选本地 AI 服务：
-  - Ollama：`11434`
-  - Chroma：`8000`
-  - reranker：`8081`
+- MySQL
+- Docker Desktop（使用容器部署时需要）
+- DeepSeek API Key，或已配置的本地模型服务
 
-### 本地启动
+### 本地启动 API
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 Copy-Item .env.example .env
+```
+
+编辑 `.env`，至少配置模型、MySQL 和 `MEMORY_ENCRYPTION_KEY`，然后执行：
+
+```powershell
 .\.venv\Scripts\finpilot.exe doctor
+.\.venv\Scripts\finpilot.exe knowledge bootstrap
 .\.venv\Scripts\finpilot.exe serve
 ```
 
-健康检查：
+服务启动后可访问：
+
+- API：`http://localhost:8099`
+- 健康检查：`http://localhost:8099/healthz`
+- 就绪检查：`http://localhost:8099/readyz`
+
+### 启动交互式 CLI
 
 ```powershell
-curl http://localhost:8099/healthz
-curl http://localhost:8099/readyz
-```
-
-`/healthz` 只表示进程存活。`/readyz` 会轻量检查 MySQL、BM25、Chroma、embedding、reranker 和 LLM 配置，不执行昂贵推理。显式禁用的依赖会返回 `ok` 且 `detail=disabled`；启用但不可用的依赖会返回 `degraded` 或 `failed`。
-
-### CLI 使用
-
-```powershell
-.\.venv\Scripts\finpilot.exe ask "工资发放审批规则是什么？" --user-id user-1
 .\.venv\Scripts\finpilot.exe chat --user-id user-1
 ```
 
-交互命令：
+也可以直接执行单次问答：
+
+```powershell
+.\.venv\Scripts\finpilot.exe ask "工资发放审批规则是什么？" --user-id user-1
+```
+
+### Docker Compose 启动
+
+准备 `.env` 后启动 FinPilot 及观测组件：
+
+```powershell
+docker compose --profile app up --build -d
+docker compose ps
+```
+
+停止服务：
+
+```powershell
+docker compose --profile app down
+```
+
+### 本地运行展示页
+
+```powershell
+Set-Location web
+npm install
+npm run dev
+```
+
+本地开发地址通常为 `http://localhost:5173`，线上版本见 [FinPilot Showcase](https://finpilot-showcase.pages.dev/)。
+
+## 项目结构
 
 ```text
-/help
-/new [chat-id]
-/debug on
-/context
-/clear
-/exit
+finpilot/                 Python 服务与 Agent 核心代码
+├── agent/                Planner、DAG、SubAgent 与工具
+├── context/              上下文构建、预算与压缩
+├── memory/               会话及用户记忆
+├── rag/                  知识导入与混合检索
+├── safety/               安全审查、审批与脱敏
+├── evals/                评测执行与指标统计
+└── observability/        审计与链路追踪
+tests/                    Python 自动化测试
+evals/                    评测数据、发布门禁与报告
+web/                      React 项目展示页
+docker/                   可选本地 AI 服务
+compose.yaml              FinPilot 与观测组件编排
 ```
 
-初始化共享知识资源：
-
-```powershell
-.\.venv\Scripts\finpilot.exe knowledge bootstrap
-```
-
-## API 示例
-
-### 对话
-
-```powershell
-curl -X POST http://localhost:8099/api/finance/chat `
-  -H "Content-Type: application/json" `
-  -H "X-Debug-Trace: true" `
-  -d '{
-    "user_id": "user-1",
-    "chat_id": "chat-1",
-    "content": "查询 1001 账户余额，并说明是否存在异常。"
-  }'
-```
-
-未设置 `X-Debug-Trace: true` 时，路由调试、检索调试、工具调用细节和 `safety_findings.detail` 不会暴露给公开响应。公开响应保留 finding code、reviewer、action、message、severity，便于客户端展示和排障。
-
-### 知识导入
-
-```powershell
-curl -X POST http://localhost:8099/api/knowledge/documents `
-  -H "Content-Type: application/json" `
-  -d '{
-    "document_id": "finance-rule-001",
-    "domain": "FINANCE",
-    "title": "工资发放审批规则",
-    "source": "manual",
-    "content": "工资发放通常需要提交审批并完成财务复核。",
-    "tags": ["工资", "审批"]
-  }'
-```
-
-导入链路会写入 MySQL 知识文档表、BM25 索引，并在向量服务可用时写入 Chroma。
-
-## 配置与部署
-
-复制根目录 `.env.example` 到 `.env` 后再启动服务。示例里的 MySQL、Langfuse、MinIO、Redis、ClickHouse 密钥仅用于本地开发；当 `APP_ENV != local` 时，FinPilot 会拒绝空 DeepSeek key 和已知本地默认密钥。
-
-```powershell
-docker compose --env-file .env config --quiet
-docker compose up --build
-```
-
-默认端口：
-
-| 服务 | 地址 |
-| --- | --- |
-| FinPilot API | `http://localhost:8099` |
-| Langfuse UI | `http://localhost:3000` |
-| OTel HTTP receiver | `http://localhost:4318` |
-| MinIO API | `http://localhost:9090` |
-
-可选本地 AI lab：
-
-```powershell
-docker compose --profile ai-lab up --build
-```
-
-独立 AI lab compose 文件位于 `docker/` 时，复制 `docker/.env.example` 到 `docker/.env`。`docker/.env` 不应提交到 Git。
-
-## 评测与观测
-
-基础验证：
+## 验证
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe -m ruff check .
 ```
 
-安装真实生成质量评测依赖：
+前端验证：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -e ".[eval]"
+Set-Location web
+npm test
+npm run build
 ```
 
-运行评测：
+## 使用说明
 
-```powershell
-finpilot eval list
-finpilot eval run --mode smoke
-finpilot eval run rag_retrieval --mode regression
-finpilot eval run --mode release
-```
-
-评测数据位于 `evals/datasets`，包括 `rag_retrieval`、`rag_generation`、`query_rewrite_reranker`、`planning_orchestration`、`tool_selection`、`tool_execution`、`end_to_end_task`、`multi_turn_memory`、`safety_redteam`、`resilience_degradation`、`performance_cost`、`observability_audit`。其中 `tool_selection` 运行真实 Planner 与所选 SubAgent 的首步决策，但在工具执行前截停；`tool_execution` 单独验证真实调用结果与副作用。发布阈值位于 `evals/release_gate.json`。
-
-每次 `finpilot eval run` 都会在 `evals/reports` 自动生成指标型 Markdown 报告；可用 `--report-dir` 指定其他目录。报告按 RAG、规划、工具调用等能力汇总召回率、MRR、计划可行率、工具误判率、参数错误率、性能成本等指标，并复用发布门禁阈值给出达标结论。Langfuse 继续用于 trace 下钻和版本趋势分析，Markdown 用于版本验收与归档。
-
-`controlled` case 使用可控测试替身，不要求启动外部服务；`live` case 会先检查 MySQL、Chroma、embedding、reranker、模型、Langfuse、OTel 等依赖。依赖未启动时结果为 `ENV_UNAVAILABLE`，不会伪装成 0 分或通过。RAG 检索指标包含 Recall@K、Precision@K、Hit@K、MRR 和 NDCG；这里的 MRR 是 Mean Reciprocal Rank，不是 MMR 算法。
-
-DeepSeek 的性能成本评测使用 provider 返回的 token usage。若 case 配置了成本上限，还需设置 `AI_INPUT_COST_PER_MILLION` 和 `AI_OUTPUT_COST_PER_MILLION`；本地 Ollama 成本按 0 计算。新审计结果写入 `schema_version=2`，旧版本评测审计会在 AuditStore 初始化时清理。
-
-## 安全治理
-
-FinPilot 在四个位置执行安全审查：
-
-- 输入审查：路由前识别 prompt injection、危险意图和不支持请求。
-- 工具参数审查：执行前基于工具定义的 `risk_level`、参数和上下文判断是否阻断或要求审批。
-- 工具结果审查：防止工具返回内容携带泄露、注入或不可公开信息。
-- 最终回答审查：持久化和返回前检查幻觉、越权披露和安全 finding。
-
-审批复用范围包含 `user_id + chat_id + tool_name + finding_code + 参数指纹 + expires_at`，避免一次审批被过度复用。`transfer_mock_funds` 仅作为本地演示风险工具保留在注册表中，默认不暴露给普通 Finance QA 上下文。
-
-## 项目结构
-
-```text
-finpilot/
-  agent/              # LangGraph runtime, sub-agents, tools, safety, audit hooks
-  evals/              # eval runner and schema helpers
-  config.py           # application settings and production guardrails
-  service.py          # API/CLI service boundary
-tests/                # unit and smoke tests
-evals/datasets/       # JSONL smoke datasets
-docker/               # optional local AI lab compose config
-observability/        # OTel/Langfuse related config
-web/                  # product showcase frontend and shared visual assets
-```
-
-## 排障手册
-
-| 现象 | 检查项 |
-| --- | --- |
-| DeepSeek 相关能力不可用 | 检查 `DEEPSEEK_API_KEY`，以及 routing、RAG curation、safety response 是否配置为 DeepSeek。 |
-| `/readyz` 中 BM25 degraded | 运行 `finpilot knowledge bootstrap`，或确认 `BM25_INDEX_PATH` 指向有效索引。 |
-| Chroma / embedding degraded | 启动 AI lab profile，或设置 `VECTOR_ENABLED=false` 使用 BM25-only 本地模式。 |
-| reranker degraded | 启动 reranker 服务，或设置 `RERANKER_ENABLED=false`。 |
-| 请求被安全审查阻断 | 查看 `issues`、`safety_findings` 和审计记录；只在可信诊断环境使用 `X-Debug-Trace: true`。 |
-| eval 返回 `ENV_UNAVAILABLE` | 查看 failure 中的缺失能力；启动对应外部服务，或只运行使用可控替身的 case。 |
-| eval 返回 `FIXTURE_UNAVAILABLE` | 检查 controlled case 的 `fixtures.observation` 或已注册的命名 fixture。 |
-
-## 记忆加密与 Chroma
-
-短期会话、MySQL 结构化用户记忆和 Chroma 语义记忆均使用 AES-256-GCM 加密保存。生成 URL-safe Base64 密钥并写入运行环境的 `MEMORY_ENCRYPTION_KEY`：
-
-```powershell
-.\.venv\Scripts\python.exe -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"
-```
-
-密钥不得提交到 Git；密钥缺失或错误时 `/readyz` 会报告失败，已有密文也无法恢复。更换密钥前必须先完成数据重加密。
-
-从旧 collection 迁移到明确使用 cosine 距离的 v2 collection：
-
-```powershell
-finpilot chroma migrate-v2
-```
-
-命令保留 v1 collection，重新计算 BGE-M3 embedding，并将用户记忆以新随机密文写入 v2。迁移成功后可使用 Chroma 官方终端浏览器查看记录变化：
-
-```powershell
-chroma browse finance-user-memory-bge-m3-v2 --host http://localhost:8000
-chroma browse finance-knowledge-bge-m3-v2 --host http://localhost:8000
-```
-
-两类数据位于同一 Chroma database 的不同 collection，ID、索引和查询相互隔离。记忆的 document/evidence 在浏览器中显示为密文，Agent 加载时才会解密。
-
-## 路线图
-
-- 接入真实财资后端：账户、余额、流水、回单、资金池、付款、转账、单据文件。
-- 增加登录、鉴权、用户权限和管理员能力边界。
-- 将模拟操作工具替换为受控 HTTP 后端适配器。
-- 扩展企业级业务规则校验与流程编排。
-- 持续扩充真实业务样本、对抗样本和历史回归样本，并根据生产基线校准发布阈值。
-
-## 非目标
-
-本轮项目不改变 `/api/finance/chat`、`/api/knowledge/*`、`/internal/evals/*` 的鉴权行为，也不把模拟付款/转账工具声明为真实资金处理能力。
+FinPilot 当前重点是验证智能编排、知识检索、记忆、安全治理和可观测性。仓库中的账户、付款和转账能力使用模拟数据或模拟执行器，不应被视为可直接处理真实资金的生产系统；接入真实业务系统前，应补充身份认证、权限控制、密钥管理和生产级审批流程。
