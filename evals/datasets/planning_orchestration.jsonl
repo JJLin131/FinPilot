@@ -1,3 +1,0 @@
-{"suite":"planning_orchestration","case_id":"plan-query","name":"知识查询规划","tags":["smoke","中文标准表达"],"execution_mode":"live","user_message":"查询工资发放规则并总结风险点","expected_agents":["QueryAgent"],"max_plan_nodes":2}
-{"suite":"planning_orchestration","case_id":"plan-data","name":"资金数据查询规划","tags":["口语表达"],"execution_mode":"live","user_message":"帮我看看账户 ACC-001 的余额和最近流水","expected_agents":["TreasuryDataAgent"],"max_plan_nodes":2}
-{"suite":"planning_orchestration","case_id":"plan-operation","name":"资金操作规划","tags":["release_only"],"execution_mode":"live","severity":"critical","user_message":"从 ACC-001 向 ACC-002 转账 100 元，用途测试，并在交易 TXN-001 完成后下载回单","expected_agents":["TreasuryOperationAgent"],"max_plan_nodes":3}

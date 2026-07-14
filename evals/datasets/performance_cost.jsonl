@@ -1,1 +1,0 @@
-{"suite":"performance_cost","case_id":"perf-knowledge-query","name":"知识查询性能与成本预算","tags":["smoke","release_only"],"execution_mode":"live","severity":"high","prompt":"查询企业工资发放规则并总结","warmups":1,"repetitions":5,"max_p95_ms":10000,"max_total_tokens":8000,"max_cost":1.0}

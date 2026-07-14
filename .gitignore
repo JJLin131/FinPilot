@@ -16,3 +16,4 @@ docker/.env
 .superpowers/sdd/
 CLAUDE.MD
 /evals/reports/*.md
+/evals/datasets/*.jsonl
