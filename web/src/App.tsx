@@ -1,12 +1,10 @@
 import {
   Archive,
   Banknote,
-  Boxes,
   BrainCircuit,
   CircleDollarSign,
   ClipboardCheck,
   Database,
-  FileSearch,
   Gauge,
   Github,
   GitBranch,
@@ -15,8 +13,6 @@ import {
   LockKeyhole,
   Mail,
   Network,
-  PieChart,
-  Radar,
   Scale,
   ShieldCheck,
   Sparkles,
@@ -24,14 +20,19 @@ import {
 } from "lucide-react";
 
 import heroBackground from "./assets/finpilot-treasury-hero-v2.png";
+import showcaseAnswer from "./assets/showcase/finpilot-grounded-answer.png";
+import showcaseInteraction from "./assets/showcase/finpilot-user-interaction.png";
+import showcasePlan from "./assets/showcase/finpilot-execution-plan.png";
+import showcaseSafety from "./assets/showcase/finpilot-safety-approval.png";
+import showcaseStart from "./assets/showcase/finpilot-cli-start.png";
 
-type IconType = typeof Boxes;
+type IconType = typeof ClipboardCheck;
 
-type Capability = {
+type ShowcaseShot = {
+  step: string;
   title: string;
+  image: string;
   description: string;
-  Icon: IconType;
-  accent: string;
 };
 
 type Scenario = {
@@ -47,43 +48,43 @@ type ArchitectureItem = {
 };
 
 const navItems = [
-  { label: "产品能力", href: "#capabilities" },
+  { label: "项目展示", href: "#capabilities" },
   { label: "解决方案", href: "#workflow" },
   { label: "行业场景", href: "#scenarios" },
   { label: "技术架构", href: "#architecture" },
   { label: "关于我们", href: "#about" },
 ];
 
-const capabilities: Capability[] = [
+const showcaseShots: ShowcaseShot[] = [
   {
-    title: "多智能体协同",
-    description: "由规划、知识、规则、分析与审计 Agent 分工协作，覆盖复杂财资任务链路。",
-    Icon: Boxes,
-    accent: "text-[#b6adff] border-[#8b7dff]/40 bg-[#1b1730]/72",
+    step: "01",
+    title: "CLI 启动与会话入口",
+    image: showcaseStart,
+    description: "FinPilot 本地交互式财资 Agent Shell，展示命令入口、会话状态、上下文窗口和项目元信息。",
   },
   {
-    title: "意图识别与理解",
-    description: "识别账户查询、交易分析、规则校验、风险问答等业务意图，并保留上下文。",
-    Icon: Radar,
-    accent: "text-[#77e6ff] border-[#0bb7d8]/38 bg-[#0d2632]/72",
+    step: "02",
+    title: "自然语言财资任务输入",
+    image: showcaseInteraction,
+    description: "用户直接用业务语言提出工资代发请求，系统进入规划状态并持续展示上下文与运行进度。",
   },
   {
-    title: "知识与规则驱动",
-    description: "融合企业制度、财资知识、监管要求与历史案例，让回答和动作有据可查。",
-    Icon: FileSearch,
-    accent: "text-[#e4c580] border-[#d8b678]/42 bg-[#211b12]/72",
+    step: "03",
+    title: "多 Agent 执行计划生成",
+    image: showcasePlan,
+    description: "Planner 将请求拆解为规则查询、余额校验和付款创建等节点，并分派到专业 Agent 并行执行。",
   },
   {
-    title: "财资处理与分析",
-    description: "围绕账户、收付、资金计划、报表与风险指标形成可解释的分析结论。",
-    Icon: PieChart,
-    accent: "text-[#96cbff] border-[#5da9ea]/38 bg-[#10223a]/72",
+    step: "04",
+    title: "高风险操作审批",
+    image: showcaseSafety,
+    description: "付款与转账类工具调用触发安全审批，明确展示风险原因、工具名称和关键参数。",
   },
   {
-    title: "合规与审计保障",
-    description: "对高风险动作、敏感内容与规则冲突进行护栏校验，沉淀完整审计线索。",
-    Icon: ShieldCheck,
-    accent: "text-[#8df0dc] border-[#38d6c4]/36 bg-[#0d2a2b]/72",
+    step: "05",
+    title: "基于证据的最终回答",
+    image: showcaseAnswer,
+    description: "系统引用企业制度与银行规则作为依据，说明无法直接执行的原因，并给出需要补充的信息。",
   },
 ];
 
@@ -307,24 +308,58 @@ function App() {
       <section
         id="capabilities"
         role="region"
-        aria-label="产品能力"
+        aria-label="项目展示"
         className="section-atmosphere relative overflow-hidden px-5 py-24 sm:px-8 lg:px-14"
       >
         <SectionBackdrop variant="warm" />
         <div className="relative z-10">
           <SectionHeading
-            eyebrow="Product Capability"
-            title="产品能力"
+            eyebrow="Project Showcase"
+            title="项目展示"
           />
 
-          <div className="mx-auto grid max-w-7xl gap-4 md:grid-cols-2 xl:grid-cols-5">
-            {capabilities.map(({ title, description, Icon, accent }) => (
-              <article key={title} className={`rounded-lg border p-6 backdrop-blur-xl ${accent}`}>
-                <Icon className="h-9 w-9" strokeWidth={1.6} aria-hidden="true" />
-                <h3 className="mt-7 text-xl font-semibold text-white">{title}</h3>
-                <p className="mt-4 text-sm leading-7 text-[#c5cfdd]">{description}</p>
-              </article>
-            ))}
+          <div className="mx-auto grid max-w-7xl gap-5">
+            <article className="group overflow-hidden rounded-lg border border-[#d8b678]/34 bg-[#0a0f15]/82 shadow-[0_24px_90px_rgba(0,0,0,0.42)] backdrop-blur-xl transition duration-300 hover:border-[#74e6ff]/45">
+              <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+                <div>
+                  <span className="font-mono text-xs text-[#74e6ff]">{showcaseShots[0].step}</span>
+                  <h3 className="mt-2 text-2xl font-semibold text-white">{showcaseShots[0].title}</h3>
+                </div>
+                <span className="hidden rounded-full border border-[#d8b678]/30 px-3 py-1 text-xs font-semibold text-[#d8b678] sm:inline-flex">
+                  live CLI
+                </span>
+              </div>
+              <div className="bg-[#111]/92 p-3">
+                <img
+                  src={showcaseShots[0].image}
+                  alt={showcaseShots[0].title}
+                  className="aspect-[16/7] w-full rounded-md object-contain transition duration-300 group-hover:scale-[1.01]"
+                />
+              </div>
+              <p className="px-5 pb-5 pt-1 text-sm leading-7 text-[#c5cfdd]">{showcaseShots[0].description}</p>
+            </article>
+
+            <div className="grid gap-5 lg:grid-cols-2">
+              {showcaseShots.slice(1).map(({ step, title, image, description }) => (
+                <article
+                  key={title}
+                  className="group overflow-hidden rounded-lg border border-white/12 bg-[#101721]/76 backdrop-blur-xl transition duration-300 hover:-translate-y-1 hover:border-[#74e6ff]/44 hover:shadow-[0_20px_70px_rgba(0,0,0,0.36)]"
+                >
+                  <div className="border-b border-white/10 px-5 py-4">
+                    <span className="font-mono text-xs text-[#74e6ff]">{step}</span>
+                    <h3 className="mt-2 text-xl font-semibold text-white">{title}</h3>
+                  </div>
+                  <div className="bg-[#111]/92 p-3">
+                    <img
+                      src={image}
+                      alt={title}
+                      className="aspect-[16/5] w-full rounded-md object-contain transition duration-300 group-hover:scale-[1.015]"
+                    />
+                  </div>
+                  <p className="px-5 pb-5 pt-1 text-sm leading-7 text-[#c5cfdd]">{description}</p>
+                </article>
+              ))}
+            </div>
           </div>
         </div>
       </section>
