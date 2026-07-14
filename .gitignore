@@ -14,4 +14,5 @@ docker/.env
 /web/vite-dev*.log
 .worktrees/
 .superpowers/sdd/
+CLAUDE.MD
 /evals/reports/*.md
