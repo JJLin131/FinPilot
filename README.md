@@ -42,6 +42,34 @@ flowchart LR
 
 Planner 根据用户目标生成执行计划。相互独立的只读任务可以并行处理，付款和转账等操作任务按顺序执行；当前置任务失败或被安全策略阻断时，依赖任务不会继续执行。所有 Agent 结果最终由统一回答节点进行汇总。
 
+## 运行效果
+
+以下截图来自 [FinPilot Showcase](https://finpilot-showcase.pages.dev/)，展示同一笔工资代发请求从计划生成、风险审批到证据回答的主要运行链路。
+
+### 多 Agent 执行计划
+
+Planner 将工资规则检索、账户余额校验和付款创建拆分为 DAG 节点。独立的只读任务由 QueryAgent 与 TreasuryDataAgent 并行执行，操作节点等待前置任务完成后再进入执行阶段。
+
+<p align="center">
+  <img src="web/src/assets/showcase/finpilot-execution-plan.png" alt="FinPilot 多 Agent 执行计划与 DAG 依赖" width="100%" />
+</p>
+
+### 高风险操作审批
+
+付款和转账等高风险工具调用会暂停执行，并展示风险原因、工具名称及关键参数，等待用户按单次或当前会话范围确认。
+
+<p align="center">
+  <img src="web/src/assets/showcase/finpilot-safety-approval.png" alt="FinPilot 高风险工具调用人工审批" width="100%" />
+</p>
+
+### 基于证据的最终回答
+
+系统汇总企业制度和银行规则等检索证据，说明操作无法直接完成的原因，并明确列出继续执行前需要补充的信息。
+
+<p align="center">
+  <img src="web/src/assets/showcase/finpilot-grounded-answer.png" alt="FinPilot 基于业务规则与检索证据生成最终回答" width="100%" />
+</p>
+
 ## 项目架构
 
 | 模块 | 职责 |
@@ -92,6 +120,10 @@ Copy-Item .env.example .env
 ```powershell
 .\.venv\Scripts\finpilot.exe chat --user-id user-1
 ```
+
+<p align="center">
+  <img src="web/src/assets/showcase/finpilot-cli-start.png" alt="FinPilot 交互式 CLI 启动界面" width="100%" />
+</p>
 
 也可以直接执行单次问答：
 
